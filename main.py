@@ -13,6 +13,7 @@ from src.handlers import (
     menu_add,
     menu_admin,
     menu_groups,
+    menu_reply,
     menu_settings,
     menu_subjects,
     menu_tasks,
@@ -33,6 +34,8 @@ async def main() -> None:
     dp = Dispatcher()
     dp.include_router(common.router)
     dp.include_router(menu.router)
+    # menu_reply должен быть до FSM-роутеров — нажатие reply-кнопки отменяет ввод.
+    dp.include_router(menu_reply.router)
     dp.include_router(menu_tasks.router)
     dp.include_router(menu_subjects.router)
     dp.include_router(menu_settings.router)

@@ -28,6 +28,10 @@ async def _active_group_id(callback_or_message: CallbackQuery | Message) -> int 
         return group.id if group is not None else None
 
 
+async def open_subjects(target: CallbackQuery | Message) -> None:
+    await _render_subjects(target)
+
+
 async def _render_subjects(target: CallbackQuery | Message) -> None:
     group_id = await _active_group_id(target)
     if group_id is None:

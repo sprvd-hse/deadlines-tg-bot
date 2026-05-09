@@ -1,5 +1,5 @@
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 
 from src import texts
 from src.db.session import SessionLocal
@@ -11,7 +11,11 @@ from src.services.users import get_or_create_user
 router = Router(name="menu_settings")
 
 
-async def _render_settings(callback: CallbackQuery) -> None:
+async def open_settings(target: CallbackQuery | Message) -> None:
+    await _render_settings(target)
+
+
+async def _render_settings(callback: CallbackQuery | Message) -> None:
     u = callback.from_user
     if u is None:
         return

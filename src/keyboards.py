@@ -1,4 +1,10 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 
 from src.db.models import AssignmentType, Subject
 
@@ -101,3 +107,38 @@ def back_home_kb() -> InlineKeyboardMarkup:
 
 def with_back_home(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[*rows, [_BTN_BACK, _BTN_HOME]])
+
+
+# ============ Reply-keyboard (постоянная под полем ввода) ============
+
+REPLY_BTN_TASKS = "📋 Задания"
+REPLY_BTN_ADD = "➕ Добавить"
+REPLY_BTN_SUBJ = "📚 Предметы"
+REPLY_BTN_GRP = "👥 Группа"
+REPLY_BTN_SET = "⚙️ Настройки"
+REPLY_BTN_HELP = "❓ Помощь"
+
+REPLY_BUTTONS: tuple[str, ...] = (
+    REPLY_BTN_TASKS,
+    REPLY_BTN_ADD,
+    REPLY_BTN_SUBJ,
+    REPLY_BTN_GRP,
+    REPLY_BTN_SET,
+    REPLY_BTN_HELP,
+)
+
+
+def home_reply_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=REPLY_BTN_TASKS), KeyboardButton(text=REPLY_BTN_ADD)],
+            [KeyboardButton(text=REPLY_BTN_SUBJ), KeyboardButton(text=REPLY_BTN_GRP)],
+            [KeyboardButton(text=REPLY_BTN_SET), KeyboardButton(text=REPLY_BTN_HELP)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def remove_reply_kb() -> ReplyKeyboardRemove:
+    return ReplyKeyboardRemove()

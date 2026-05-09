@@ -14,11 +14,9 @@ from src.states import AddAssignment
 router = Router(name="menu_add")
 
 
-@router.callback_query(F.data == "m:add")
-async def cb_add(callback: CallbackQuery, state: FSMContext) -> None:
-    u = callback.from_user
+async def open_add(target: CallbackQuery | Message, state: FSMContext) -> None:
+    u = target.from_user
     if u is None:
-        await callback.answer()
         return
     async with SessionLocal() as session, session.begin():
         user = await get_or_create_user(
@@ -26,21 +24,19 @@ async def cb_add(callback: CallbackQuery, state: FSMContext) -> None:
         )
         group = await get_active_group(session, user)
         if group is None:
-            await render(callback, texts.NO_ACTIVE_GROUP, back_home_kb())
+            await render(target, texts.NO_ACTIVE_GROUP, back_home_kb())
             return
         subjects = await subj_svc.list_subjects(session, group.id)
         if not subjects:
-            await render(callback, texts.ADD_NEED_SUBJECTS, back_home_kb())
+            await render(target, texts.ADD_NEED_SUBJECTS, back_home_kb())
             return
         await state.update_data(group_id=group.id, group_tz=group.timezone)
 
     await state.set_state(AddAssignment.waiting_type)
-    # Дальше ввод идёт обычными FSM-хендлерами в src.handlers.assignments
-    # (assign_type:* / assign_subj:* / текстовые поля / assign_confirm:yes|no).
-    msg = callback.message
-    if isinstance(msg, Message):
-        try:
-            await msg.edit_text(texts.ADD_STEP_TYPE, reply_markup=assignment_type_kb())
-        except Exception:
-            await msg.answer(texts.ADD_STEP_TYPE, reply_markup=assignment_type_kb())
-    await callback.answer()
+    # Дальше ввод идёт FSM-хендлерами в src.handlers.assignments.
+    await render(target, texts.ADD_STEP_TYPE, assignment_type_kb())
+
+
+@router.callback_query(F.data == "m:add")
+async def cb_add(callback: CallbackQuery, state: FSMContext) -> None:
+    await open_add(callback, state)

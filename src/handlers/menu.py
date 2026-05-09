@@ -1,11 +1,17 @@
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 
 from src import texts
 from src.db.session import SessionLocal
-from src.keyboards import back_home_kb, home_kb
+from src.keyboards import back_home_kb, home_reply_kb
 from src.services.groups import get_active_group, is_creator
 from src.services.users import get_or_create_user
 
@@ -15,16 +21,25 @@ router = Router(name="menu")
 async def render(
     target: Message | CallbackQuery,
     text: str,
-    kb: InlineKeyboardMarkup,
+    kb: InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | None,
 ) -> None:
-    """Универсальный рендер: на Message — отправляет, на CallbackQuery — правит то же сообщение."""
+    """Унифицированный рендер.
+
+    На Message — отправляет новое сообщение. На CallbackQuery — пытается
+    отредактировать исходное сообщение (только для inline-клавиатур),
+    иначе отправляет новое.
+    """
+    is_inline = isinstance(kb, InlineKeyboardMarkup) or kb is None
     if isinstance(target, CallbackQuery):
         msg = target.message
         if isinstance(msg, Message):
-            try:
-                await msg.edit_text(text, reply_markup=kb)
-            except Exception:
-                # Если не получилось отредактировать (старое сообщение и т.п.) — отправим новое.
+            if is_inline:
+                try:
+                    await msg.edit_text(text, reply_markup=kb)
+                except Exception:
+                    await msg.answer(text, reply_markup=kb)
+            else:
+                # Reply-клавиатуру нельзя приклеить через edit_text — шлём новое.
                 await msg.answer(text, reply_markup=kb)
         await target.answer()
         return
@@ -55,14 +70,10 @@ async def open_home(target: Message | CallbackQuery, state: FSMContext | None = 
     user = target.from_user
     if user is None:
         return
-    has_group, creator, group_name = await _home_state(
+    has_group, _creator, group_name = await _home_state(
         user.id, user.username, user.full_name or user.username or "user"
     )
-    await render(
-        target,
-        _home_text(has_group, group_name),
-        home_kb(has_active_group=has_group, is_creator=creator),
-    )
+    await render(target, _home_text(has_group, group_name), home_reply_kb())
 
 
 @router.message(Command("menu"))

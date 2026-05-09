@@ -18,7 +18,7 @@ router = Router(name="menu_tasks")
 _PAGE_SIZE = 8
 
 
-async def _user_ctx(callback: CallbackQuery):
+async def _user_ctx(callback: CallbackQuery | Message):
     u = callback.from_user
     if u is None:
         return None
@@ -71,7 +71,11 @@ async def cb_tasks_page(callback: CallbackQuery) -> None:
     await _render_tasks_page(callback, page=page)
 
 
-async def _render_tasks_page(callback: CallbackQuery, *, page: int) -> None:
+async def open_tasks_page(target: CallbackQuery | Message, *, page: int) -> None:
+    await _render_tasks_page(target, page=page)
+
+
+async def _render_tasks_page(callback: CallbackQuery | Message, *, page: int) -> None:
     ctx = await _user_ctx(callback)
     if ctx is None:
         await render(callback, texts.NO_ACTIVE_GROUP, back_home_kb())

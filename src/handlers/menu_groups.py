@@ -31,7 +31,11 @@ _GROUP_NAME_MAX = 128
 # ============ Хаб группы ============
 
 
-async def _render_group_hub(callback: CallbackQuery) -> None:
+async def open_group_hub(target: CallbackQuery | Message) -> None:
+    await _render_group_hub(target)
+
+
+async def _render_group_hub(callback: CallbackQuery | Message) -> None:
     u = callback.from_user
     if u is None:
         return
