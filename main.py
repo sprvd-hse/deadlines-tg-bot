@@ -10,6 +10,7 @@ from src.handlers import (
     common,
     groups,
     menu,
+    menu_add,
     menu_groups,
     menu_settings,
     menu_subjects,
@@ -35,6 +36,7 @@ async def main() -> None:
     dp.include_router(menu_subjects.router)
     dp.include_router(menu_settings.router)
     dp.include_router(menu_groups.router)
+    dp.include_router(menu_add.router)
     dp.include_router(groups.router)
     dp.include_router(subjects.router)
     dp.include_router(assignments.router)
