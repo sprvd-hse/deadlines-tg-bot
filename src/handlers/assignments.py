@@ -326,7 +326,7 @@ async def _render_list(message: Message, subject_name: str | None) -> None:
 
 
 def _render_item(a: Assignment, subj_by_id: dict[int, str], tz_name: str, completed: bool) -> str:
-    marker = "✓ " if completed else ""
+    marker = "✅ " if completed else ""
     type_label = ASSIGNMENT_TYPE_LABELS.get(a.type, a.type.value)
     subject_label = subj_by_id.get(a.subject_id, "?")
     deadline_str = format_deadline_display(a.deadline, tz_name)
@@ -640,7 +640,7 @@ async def edit_links(message: Message, state: FSMContext) -> None:
     summary = _build_summary(data)
     await message.answer(
         f"{texts.EDIT_CONFIRM_HEADER}\n\n{summary}",
-        reply_markup=confirm_kb(prefix="edit_confirm", yes_label="✓ Сохранить"),
+        reply_markup=confirm_kb(prefix="edit_confirm", yes_label="✅ Сохранить"),
     )
 
 

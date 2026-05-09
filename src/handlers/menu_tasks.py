@@ -45,7 +45,7 @@ async def _load_tasks(group_id: int, user_id: int) -> tuple[list[Assignment], li
 
 
 def _row_label(a: Assignment, subj_by_id: dict[int, str], tz_name: str, completed: bool) -> str:
-    marker = "✓ " if completed else ""
+    marker = "✅ " if completed else ""
     type_label = ASSIGNMENT_TYPE_LABELS.get(a.type, a.type.value)
     subject = subj_by_id.get(a.subject_id, "?")
     deadline = format_deadline_display(a.deadline, tz_name)
@@ -53,7 +53,7 @@ def _row_label(a: Assignment, subj_by_id: dict[int, str], tz_name: str, complete
 
 
 def _short_button_label(a: Assignment, subj_by_id: dict[int, str], completed: bool) -> str:
-    marker = "✓ " if completed else ""
+    marker = "✅ " if completed else ""
     return f"{marker}#{a.short_id} {a.title} ({subj_by_id.get(a.subject_id, '?')})"
 
 
@@ -112,10 +112,10 @@ async def _render_tasks_page(callback: CallbackQuery | Message, *, page: int) ->
 
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="◀", callback_data=f"m:tasks:p:{page - 1}"))
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"m:tasks:p:{page - 1}"))
     nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="m:tasks:noop"))
     if page < pages - 1:
-        nav.append(InlineKeyboardButton(text="▶", callback_data=f"m:tasks:p:{page + 1}"))
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"m:tasks:p:{page + 1}"))
     if pages > 1:
         rows.append(nav)
 
@@ -158,7 +158,7 @@ async def _render_task_card(callback: CallbackQuery, assignment_id: int) -> None
     type_label = ASSIGNMENT_TYPE_LABELS.get(a.type, a.type.value)
     subj_name = subj_by_id.get(a.subject_id, "?")
     deadline = format_deadline_display(a.deadline, tz_name)
-    state_str = "✓ выполнено" if is_done else "○ не выполнено"
+    state_str = "✅ выполнено" if is_done else "○ не выполнено"
     active_str = "" if a.is_active else "\n(удалено)"
 
     lines = [
@@ -180,7 +180,7 @@ async def _render_task_card(callback: CallbackQuery, assignment_id: int) -> None
             rows.append(
                 [
                     InlineKeyboardButton(
-                        text="↺ Снять отметку",
+                        text="🔄 Снять отметку",
                         callback_data=f"m:task:{a.id}:undone",
                     )
                 ]
@@ -189,7 +189,7 @@ async def _render_task_card(callback: CallbackQuery, assignment_id: int) -> None
             rows.append(
                 [
                     InlineKeyboardButton(
-                        text="✓ Отметить выполненным",
+                        text="✅ Отметить выполненным",
                         callback_data=f"m:task:{a.id}:done",
                     )
                 ]
@@ -234,7 +234,7 @@ async def cb_task_done(callback: CallbackQuery) -> None:
     if status == "already":
         await callback.answer("Уже отмечено")
     elif status == "ok":
-        await callback.answer("✓ Отмечено")
+        await callback.answer("✅ Отмечено")
     await _render_task_card(callback, assignment_id)
 
 
@@ -272,8 +272,8 @@ async def cb_task_del_ask(callback: CallbackQuery) -> None:
     assignment_id = int(callback.data.split(":")[2])
     rows = [
         [
-            InlineKeyboardButton(text="✓ Удалить", callback_data=f"m:task:{assignment_id}:delyes"),
-            InlineKeyboardButton(text="✗ Отмена", callback_data=f"m:task:{assignment_id}"),
+            InlineKeyboardButton(text="✅ Удалить", callback_data=f"m:task:{assignment_id}:delyes"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data=f"m:task:{assignment_id}"),
         ]
     ]
     await render(

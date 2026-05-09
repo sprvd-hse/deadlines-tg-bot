@@ -97,7 +97,7 @@ async def cb_group_switch_list(callback: CallbackQuery) -> None:
 
     rows: list[list[InlineKeyboardButton]] = []
     for group, role in groups:
-        marker = "✓ " if group.id == active_id else ""
+        marker = "✅ " if group.id == active_id else ""
         role_suffix = " (creator)" if role == MemberRole.creator else ""
         rows.append(
             [
@@ -216,8 +216,8 @@ async def msg_group_join_code(message: Message, state: FSMContext) -> None:
 async def cb_group_leave_ask(callback: CallbackQuery) -> None:
     rows = [
         [
-            InlineKeyboardButton(text="✓ Выйти", callback_data="m:grp:leaveyes"),
-            InlineKeyboardButton(text="✗ Отмена", callback_data="m:grp"),
+            InlineKeyboardButton(text="✅ Выйти", callback_data="m:grp:leaveyes"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="m:grp"),
         ]
     ]
     await render(callback, "Выйти из активной группы?", with_back_home(rows))

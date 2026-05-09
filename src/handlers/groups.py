@@ -119,7 +119,7 @@ async def cmd_my_groups(message: Message) -> None:
 
     rows = []
     for group, role in groups:
-        marker = "✓ " if group.id == active_id else ""
+        marker = "✅ " if group.id == active_id else ""
         role_suffix = " (creator)" if role == MemberRole.creator else ""
         rows.append(
             [

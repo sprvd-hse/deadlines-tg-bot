@@ -251,8 +251,8 @@ async def cb_admin_transfer_pick(callback: CallbackQuery) -> None:
     label = _member_label(target[0].full_name, target[0].tg_username)
     rows = [
         [
-            InlineKeyboardButton(text="✓ Передать", callback_data=f"m:adm:tryes:{new_uid}"),
-            InlineKeyboardButton(text="✗ Отмена", callback_data="m:adm"),
+            InlineKeyboardButton(text="✅ Передать", callback_data=f"m:adm:tryes:{new_uid}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="m:adm"),
         ]
     ]
     await render(callback, texts.TRANSFER_CONFIRM.format(name=label), with_back_home(rows))
@@ -304,8 +304,8 @@ async def cb_admin_del_step1(callback: CallbackQuery) -> None:
     _, group = res
     rows = [
         [
-            InlineKeyboardButton(text="✓ Да", callback_data="m:adm:del2"),
-            InlineKeyboardButton(text="✗ Отмена", callback_data="m:adm"),
+            InlineKeyboardButton(text="✅ Да", callback_data="m:adm:del2"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="m:adm"),
         ]
     ]
     await render(
@@ -321,8 +321,8 @@ async def cb_admin_del_step2(callback: CallbackQuery) -> None:
     _, group = res
     rows = [
         [
-            InlineKeyboardButton(text="✓ Удалить навсегда", callback_data="m:adm:del3"),
-            InlineKeyboardButton(text="✗ Отмена", callback_data="m:adm"),
+            InlineKeyboardButton(text="✅ Удалить навсегда", callback_data="m:adm:del3"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="m:adm"),
         ]
     ]
     await render(

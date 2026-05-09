@@ -41,12 +41,12 @@ def subjects_kb(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def confirm_kb(prefix: str = "assign_confirm", yes_label: str = "✓ Создать") -> InlineKeyboardMarkup:
+def confirm_kb(prefix: str = "assign_confirm", yes_label: str = "✅ Создать") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text=yes_label, callback_data=f"{prefix}:yes"),
-                InlineKeyboardButton(text="✗ Отмена", callback_data=f"{prefix}:no"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=f"{prefix}:no"),
             ]
         ]
     )
@@ -75,7 +75,7 @@ def yes_no_kb(prefix: str, yes_label: str = "Да", no_label: str = "Нет") ->
 # ============ Главное меню (inline-навигация) ============
 
 
-_BTN_BACK = InlineKeyboardButton(text="← Назад", callback_data="m:home")
+_BTN_BACK = InlineKeyboardButton(text="⬅️ Назад", callback_data="m:home")
 _BTN_HOME = InlineKeyboardButton(text="🏠 Меню", callback_data="m:home")
 
 

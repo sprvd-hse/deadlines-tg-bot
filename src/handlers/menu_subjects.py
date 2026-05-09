@@ -49,7 +49,7 @@ async def _render_subjects(target: CallbackQuery | Message) -> None:
         rows.append(
             [
                 InlineKeyboardButton(text=s.name, callback_data="m:subj:noop"),
-                InlineKeyboardButton(text="🗑", callback_data=f"m:subj:del:{s.id}"),
+                InlineKeyboardButton(text="🗑 Удалить", callback_data=f"m:subj:del:{s.id}"),
             ]
         )
     rows.append([InlineKeyboardButton(text="➕ Добавить предмет", callback_data="m:subj:add")])
@@ -127,9 +127,9 @@ async def cb_subject_del_ask(callback: CallbackQuery) -> None:
     rows = [
         [
             InlineKeyboardButton(
-                text="✓ Удалить", callback_data=f"m:subj:delyes:{sid}"
+                text="✅ Удалить", callback_data=f"m:subj:delyes:{sid}"
             ),
-            InlineKeyboardButton(text="✗ Отмена", callback_data="m:subj"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="m:subj"),
         ]
     ]
     await render(
