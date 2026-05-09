@@ -5,8 +5,8 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.db.models import Assignment, Group, GroupMember, Subject, User
-from bot.keyboards import ASSIGNMENT_TYPE_LABELS
+from src.db.models import Assignment, Group, GroupMember, Subject, User
+from src.keyboards import ASSIGNMENT_TYPE_LABELS
 
 logger = logging.getLogger(__name__)
 

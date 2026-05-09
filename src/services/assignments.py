@@ -4,7 +4,7 @@ from typing import Literal
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.db.models import Assignment, AssignmentCompletion, AssignmentType, ReminderLog
+from src.db.models import Assignment, AssignmentCompletion, AssignmentType, ReminderLog
 
 DeleteStatus = Literal["ok", "not_found", "forbidden", "already_deleted"]
 CompleteStatus = Literal["ok", "already", "not_found"]

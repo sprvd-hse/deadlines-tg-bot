@@ -1,6 +1,6 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from bot.db.models import AssignmentType, Subject
+from src.db.models import AssignmentType, Subject
 
 ASSIGNMENT_TYPE_LABELS: dict[AssignmentType, str] = {
     AssignmentType.homework: "Домашнее задание",

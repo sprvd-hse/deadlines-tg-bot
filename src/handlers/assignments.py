@@ -6,26 +6,26 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.exc import IntegrityError
 
-from bot import texts
-from bot.db.models import Assignment, AssignmentType
-from bot.db.session import SessionLocal
-from bot.keyboards import (
+from src import texts
+from src.db.models import Assignment, AssignmentType
+from src.db.session import SessionLocal
+from src.keyboards import (
     ASSIGNMENT_TYPE_LABELS,
     assignment_type_kb,
     confirm_kb,
     subjects_kb,
 )
-from bot.scheduler import (
+from src.scheduler import (
     cancel_assignment_reminders,
     schedule_assignment_reminders,
 )
-from bot.services import assignments as assn_svc
-from bot.services import subjects as subj_svc
-from bot.services.deadline_parser import DeadlineParseError, parse_deadline
-from bot.services.groups import get_active_group, is_creator
-from bot.services.users import get_or_create_user
-from bot.states import AddAssignment, EditAssignment
-from bot.utils import format_deadline_display, parse_links
+from src.services import assignments as assn_svc
+from src.services import subjects as subj_svc
+from src.services.deadline_parser import DeadlineParseError, parse_deadline
+from src.services.groups import get_active_group, is_creator
+from src.services.users import get_or_create_user
+from src.states import AddAssignment, EditAssignment
+from src.utils import format_deadline_display, parse_links
 
 router = Router(name="assignments")
 

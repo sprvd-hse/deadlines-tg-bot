@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.db.models import User
+from src.db.models import User
 
 
 async def get_or_create_user(

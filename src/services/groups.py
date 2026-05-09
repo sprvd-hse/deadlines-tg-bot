@@ -4,7 +4,7 @@ from typing import Literal
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.db.models import (
+from src.db.models import (
     Assignment,
     AssignmentCompletion,
     Group,
@@ -14,7 +14,7 @@ from bot.db.models import (
     Subject,
     User,
 )
-from bot.utils import generate_invite_code
+from src.utils import generate_invite_code
 
 JoinStatus = Literal["ok", "not_found", "already_member"]
 TransferStatus = Literal["ok", "not_member", "same_user"]

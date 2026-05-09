@@ -1,7 +1,7 @@
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from bot.config import settings
+from src.config import settings
 
 
 def _apply_sqlite_pragmas(dbapi_connection, _connection_record) -> None:

@@ -13,13 +13,13 @@ from aiogram.types import (
     User as TgUser,
 )
 
-from bot import texts
-from bot.config import settings
-from bot.db.models import MemberRole
-from bot.db.session import SessionLocal
-from bot.keyboards import members_kb, yes_no_kb
-from bot.scheduler import cancel_assignment_reminders
-from bot.services.groups import (
+from src import texts
+from src.config import settings
+from src.db.models import MemberRole
+from src.db.session import SessionLocal
+from src.keyboards import members_kb, yes_no_kb
+from src.scheduler import cancel_assignment_reminders
+from src.services.groups import (
     check_join_rate_limit,
     create_group,
     delete_group,
@@ -35,9 +35,9 @@ from bot.services.groups import (
     switch_active_group,
     transfer_ownership,
 )
-from bot.services.users import get_or_create_user
-from bot.states import GroupSettings
-from bot.utils import normalize_invite_code
+from src.services.users import get_or_create_user
+from src.states import GroupSettings
+from src.utils import normalize_invite_code
 
 router = Router(name="groups")
 
@@ -217,8 +217,8 @@ async def cb_transfer_pick(callback: CallbackQuery) -> None:
             return
         from sqlalchemy import select
 
-        from bot.db.models import GroupMember
-        from bot.db.models import User as _U
+        from src.db.models import GroupMember
+        from src.db.models import User as _U
         target = (
             await session.execute(
                 select(_U).join(GroupMember, GroupMember.user_id == _U.id).where(
@@ -268,7 +268,7 @@ async def cb_transfer_confirm(callback: CallbackQuery) -> None:
         )
         target_label = ""
         if status == "ok":
-            from bot.db.models import User as _U
+            from src.db.models import User as _U
             target = await session.get(_U, new_user_id)
             if target is not None:
                 target_label = _member_label(target.full_name, target.tg_username)
@@ -328,7 +328,7 @@ async def cb_delete_group_step1(callback: CallbackQuery) -> None:
         if not await is_creator(session, user.id, group_id):
             await callback.answer(texts.CREATOR_ONLY, show_alert=True)
             return
-        from bot.db.models import Group as _G
+        from src.db.models import Group as _G
         group = await session.get(_G, group_id)
         group_name = group.name if group is not None else ""
 
@@ -362,8 +362,8 @@ async def cb_delete_group_step2(callback: CallbackQuery) -> None:
             return
         from sqlalchemy import select as _select
 
-        from bot.db.models import Assignment as _A
-        from bot.db.models import Group as _G
+        from src.db.models import Assignment as _A
+        from src.db.models import Group as _G
         group = await session.get(_G, group_id)
         group_name = group.name if group is not None else ""
         assignment_ids = list(
@@ -439,7 +439,7 @@ async def cmd_bind_chat(message: Message) -> None:
         return
 
     async with SessionLocal() as session, session.begin():
-        from bot.db.models import Group as _G
+        from src.db.models import Group as _G
         g = await session.get(_G, group_id)
         if g is not None:
             g.chat_id = message.chat.id
@@ -469,7 +469,7 @@ async def cb_bind_chat_confirm(callback: CallbackQuery) -> None:
         if not await is_creator(session, user.id, group_id):
             await callback.answer(texts.BIND_CHAT_NOT_CREATOR, show_alert=True)
             return
-        from bot.db.models import Group as _G
+        from src.db.models import Group as _G
         g = await session.get(_G, group_id)
         if g is not None:
             g.chat_id = chat_id
@@ -657,7 +657,7 @@ async def gs_tz_input(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     group_id = data["group_id"]
     async with SessionLocal() as session, session.begin():
-        from bot.db.models import Group as _G
+        from src.db.models import Group as _G
         g = await session.get(_G, group_id)
         if g is not None:
             g.timezone = raw
@@ -764,7 +764,7 @@ async def cmd_leave(message: Message) -> None:
         group_name = group.name
         from sqlalchemy import select as _select
 
-        from bot.db.models import Assignment as _A
+        from src.db.models import Assignment as _A
         assignment_ids_to_cancel: list[int] = []
         # Если уйдём как одиночный creator — соберём id заранее, чтобы потом отменить job-ы.
         members = await list_members(session, group.id)

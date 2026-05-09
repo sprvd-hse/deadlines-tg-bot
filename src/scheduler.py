@@ -7,10 +7,10 @@ from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
-from bot.db.models import Assignment, Group, ReminderType
-from bot.db.session import SessionLocal
-from bot.services.digest import build_digest_messages, list_groups, list_recipients
-from bot.services.reminders import (
+from src.db.models import Assignment, Group, ReminderType
+from src.db.session import SessionLocal
+from src.services.digest import build_digest_messages, list_groups, list_recipients
+from src.services.reminders import (
     RECOVERY_MIN_LEAD,
     offsets_for,
     send_reminder_batch,

@@ -3,7 +3,7 @@ from typing import Literal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.db.models import Assignment, Subject
+from src.db.models import Assignment, Subject
 
 DeleteSubjectStatus = Literal["ok", "not_found", "has_assignments"]
 

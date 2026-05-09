@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.db.models import (
+from src.db.models import (
     Assignment,
     AssignmentCompletion,
     AssignmentType,
@@ -15,8 +15,8 @@ from bot.db.models import (
     Subject,
     User,
 )
-from bot.keyboards import ASSIGNMENT_TYPE_LABELS
-from bot.utils import format_deadline_display
+from src.keyboards import ASSIGNMENT_TYPE_LABELS
+from src.utils import format_deadline_display
 
 logger = logging.getLogger(__name__)
 

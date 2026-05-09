@@ -2,11 +2,11 @@ from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
-from bot import texts
-from bot.db.session import SessionLocal
-from bot.services import subjects as subjects_svc
-from bot.services.groups import get_active_group
-from bot.services.users import get_or_create_user
+from src import texts
+from src.db.session import SessionLocal
+from src.services import subjects as subjects_svc
+from src.services.groups import get_active_group
+from src.services.users import get_or_create_user
 
 router = Router(name="subjects")
 

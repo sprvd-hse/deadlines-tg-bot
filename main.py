@@ -3,9 +3,9 @@ import logging
 
 from aiogram import Bot, Dispatcher
 
-from bot.config import settings
-from bot.handlers import assignments, common, groups, subjects
-from bot.scheduler import shutdown_scheduler, start_scheduler
+from src.config import settings
+from src.handlers import assignments, common, groups, subjects
+from src.scheduler import shutdown_scheduler, start_scheduler
 
 
 async def main() -> None:
