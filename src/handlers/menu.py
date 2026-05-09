@@ -81,12 +81,12 @@ async def cb_help(callback: CallbackQuery) -> None:
 
 
 # Заглушки на остальные секции — заполним в следующих этапах.
-_STUB_SECTIONS = {
-    "m:adm": "🛠 Админ группы — раздел в разработке.",
-}
+_STUB_SECTIONS: dict[str, str] = {}
 
 
-@router.callback_query(F.data.in_(set(_STUB_SECTIONS.keys())))
-async def cb_stub(callback: CallbackQuery) -> None:
-    text = _STUB_SECTIONS.get(callback.data or "", "В разработке.")
-    await render(callback, text, back_home_kb())
+if _STUB_SECTIONS:
+
+    @router.callback_query(F.data.in_(set(_STUB_SECTIONS.keys())))
+    async def cb_stub(callback: CallbackQuery) -> None:
+        text = _STUB_SECTIONS.get(callback.data or "", "В разработке.")
+        await render(callback, text, back_home_kb())
