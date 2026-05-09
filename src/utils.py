@@ -44,10 +44,17 @@ def ensure_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
+DEADLINE_OPEN_LABEL = "до конца модуля"
+
+
 def format_deadline_display(
-    deadline_utc: datetime, tz_name: str, now: datetime | None = None
+    deadline_utc: datetime | None, tz_name: str, now: datetime | None = None
 ) -> str:
-    """Возвращает строку вида '15.12 23:59 (через 14 часов)' / '... (просрочено на 2 дня)'."""
+    """Возвращает строку вида '15.12 23:59 (через 14 часов)' / '... (просрочено на 2 дня)'.
+    Для открытого дедлайна (None) — текст 'до конца модуля'.
+    """
+    if deadline_utc is None:
+        return DEADLINE_OPEN_LABEL
     tz = ZoneInfo(tz_name)
     local = ensure_utc(deadline_utc).astimezone(tz)
     now_local = (now or datetime.now(tz=UTC)).astimezone(tz)

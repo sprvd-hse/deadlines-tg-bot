@@ -3,7 +3,7 @@ from datetime import datetime
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.exc import IntegrityError
 
 from src import texts
@@ -137,9 +137,26 @@ async def add_title(message: Message, state: FSMContext) -> None:
     )
 
 
+def _add_deadline_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📌 До конца модуля", callback_data="add_deadline:open"
+                )
+            ]
+        ]
+    )
+
+
 async def _add_after_description(message: Message, state: FSMContext) -> None:
     await state.set_state(AddAssignment.waiting_deadline)
-    await message.answer(texts.ADD_STEP_DEADLINE)
+    await message.answer(texts.ADD_STEP_DEADLINE, reply_markup=_add_deadline_kb())
+
+
+async def _add_after_deadline(message: Message, state: FSMContext) -> None:
+    await state.set_state(AddAssignment.waiting_links)
+    await message.answer(texts.ADD_STEP_LINKS, reply_markup=skip_kb("add_links"))
 
 
 @router.message(AddAssignment.waiting_description, F.text)
@@ -175,8 +192,15 @@ async def add_deadline(message: Message, state: FSMContext) -> None:
         await message.answer(texts.ADD_DEADLINE_ERROR.format(error=str(e)))
         return
     await state.update_data(deadline_iso=deadline_utc.isoformat())
-    await state.set_state(AddAssignment.waiting_links)
-    await message.answer(texts.ADD_STEP_LINKS, reply_markup=skip_kb("add_links"))
+    await _add_after_deadline(message, state)
+
+
+@router.callback_query(AddAssignment.waiting_deadline, F.data == "add_deadline:open")
+async def add_deadline_open(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(deadline_iso=None)
+    if isinstance(callback.message, Message):
+        await _add_after_deadline(callback.message, state)
+    await callback.answer()
 
 
 async def _add_after_links(message: Message, state: FSMContext) -> None:
@@ -223,7 +247,8 @@ async def add_confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
         return
     data = await state.get_data()
 
-    deadline_utc = datetime.fromisoformat(data["deadline_iso"])
+    deadline_iso = data.get("deadline_iso")
+    deadline_utc = datetime.fromisoformat(deadline_iso) if deadline_iso else None
     atype = AssignmentType(data["type"])
 
     tg_user = callback.from_user
@@ -272,7 +297,8 @@ async def add_confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
 def _build_summary(data: dict) -> str:
 
     atype = AssignmentType(data["type"])
-    deadline_utc = datetime.fromisoformat(data["deadline_iso"])
+    deadline_iso = data.get("deadline_iso")
+    deadline_utc = datetime.fromisoformat(deadline_iso) if deadline_iso else None
     deadline_str = format_deadline_display(deadline_utc, data["group_tz"])
 
     lines = [
@@ -522,8 +548,8 @@ async def cmd_edit(message: Message, command: CommandObject, state: FSMContext) 
             title=a.title,
             description=a.description,
             links=list(a.links or []),
-            deadline_iso=a.deadline.isoformat(),
-            orig_deadline_iso=a.deadline.isoformat(),
+            deadline_iso=a.deadline.isoformat() if a.deadline is not None else None,
+            orig_deadline_iso=a.deadline.isoformat() if a.deadline is not None else None,
         )
 
     current_label = ASSIGNMENT_TYPE_LABELS[AssignmentType(a.type.value)]
@@ -618,12 +644,18 @@ async def _edit_prompt_description(message: Message, state: FSMContext) -> None:
 
 async def _edit_prompt_deadline(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    deadline_utc = datetime.fromisoformat(data["deadline_iso"])
+    iso = data.get("deadline_iso")
+    deadline_utc = datetime.fromisoformat(iso) if iso else None
     current_dl = format_deadline_display(deadline_utc, data["group_tz"])
+    # Своя клавиатура: skip + «открытый дедлайн».
+    rows = [
+        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="edit_deadline:skip")],
+        [InlineKeyboardButton(text="📌 До конца модуля", callback_data="edit_deadline:open")],
+    ]
     await state.set_state(EditAssignment.waiting_deadline)
     await message.answer(
         texts.EDIT_STEP_DEADLINE.format(current=current_dl),
-        reply_markup=skip_kb("edit_deadline"),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
     )
 
 
@@ -697,6 +729,14 @@ async def edit_deadline_skip(callback: CallbackQuery, state: FSMContext) -> None
     await callback.answer()
 
 
+@router.callback_query(EditAssignment.waiting_deadline, F.data == "edit_deadline:open")
+async def edit_deadline_open(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(deadline_iso=None)
+    if isinstance(callback.message, Message):
+        await _edit_prompt_links(callback.message, state)
+    await callback.answer()
+
+
 @router.message(EditAssignment.waiting_links, F.text)
 async def edit_links(message: Message, state: FSMContext) -> None:
     raw = (message.text or "").strip()
@@ -737,9 +777,10 @@ async def edit_confirm_no(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(EditAssignment.waiting_confirm, F.data == "edit_confirm:yes")
 async def edit_confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
-    deadline_utc = datetime.fromisoformat(data["deadline_iso"])
+    iso = data.get("deadline_iso")
+    deadline_utc = datetime.fromisoformat(iso) if iso else None
     atype = AssignmentType(data["type"])
-    deadline_changed = data["deadline_iso"] != data["orig_deadline_iso"]
+    deadline_changed = data.get("deadline_iso") != data.get("orig_deadline_iso")
 
     async with SessionLocal() as session, session.begin():
         a = await session.get(Assignment, data["assignment_id"])

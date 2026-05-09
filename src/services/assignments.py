@@ -32,7 +32,7 @@ async def create_assignment(
     title: str,
     description: str | None,
     links: list[str],
-    deadline_utc: datetime,
+    deadline_utc: datetime | None,
 ) -> Assignment:
     short_id = await next_short_id(session, group_id)
     a = Assignment(
@@ -88,15 +88,18 @@ async def list_active(
     subject_id: int | None = None,
     now_utc: datetime | None = None,
 ) -> list[Assignment]:
+    from sqlalchemy import or_
+
     now = now_utc or datetime.now(tz=UTC)
     stmt = select(Assignment).where(
         Assignment.group_id == group_id,
         Assignment.is_active.is_(True),
-        Assignment.deadline >= now,
+        or_(Assignment.deadline.is_(None), Assignment.deadline >= now),
     )
     if subject_id is not None:
         stmt = stmt.where(Assignment.subject_id == subject_id)
-    stmt = stmt.order_by(Assignment.deadline)
+    # NULL-дедлайны («до конца модуля») в конец списка — после датированных по возрастанию.
+    stmt = stmt.order_by(Assignment.deadline.is_(None), Assignment.deadline)
     return list((await session.execute(stmt)).scalars())
 
 
@@ -113,6 +116,7 @@ async def list_passed(
     stmt = select(Assignment).where(
         Assignment.group_id == group_id,
         Assignment.is_active.is_(True),
+        Assignment.deadline.is_not(None),
         Assignment.deadline < now,
         Assignment.deadline >= cutoff,
     )
@@ -182,7 +186,7 @@ async def update_assignment(
     title: str,
     description: str | None,
     links: list[str],
-    deadline_utc: datetime,
+    deadline_utc: datetime | None,
 ) -> bool:
     """Обновляет поля задания. Возвращает True, если deadline изменился."""
     deadline_changed = assignment.deadline != deadline_utc

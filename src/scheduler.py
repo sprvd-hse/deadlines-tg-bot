@@ -46,8 +46,10 @@ async def _fire_reminder(assignment_id: int, reminder_type_value: str) -> None:
 
 
 def schedule_assignment_reminders(assignment: Assignment, *, now_utc: datetime | None = None) -> None:
-    """Планирует все будущие напоминания задания. Прошедшие пропускает."""
-    if _scheduler is None:
+    """Планирует все будущие напоминания задания. Прошедшие пропускает.
+    Для заданий без дедлайна (NULL) ничего не планируется.
+    """
+    if _scheduler is None or assignment.deadline is None:
         return
     now = now_utc or datetime.now(tz=UTC)
     for rtype, offset in offsets_for(assignment.type):
@@ -95,6 +97,7 @@ async def bootstrap_from_db() -> None:
                 await session.execute(
                     select(Assignment).where(
                         Assignment.is_active.is_(True),
+                        Assignment.deadline.is_not(None),
                         Assignment.deadline > now,
                     )
                 )

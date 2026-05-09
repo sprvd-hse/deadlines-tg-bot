@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -11,7 +13,7 @@ from src.services import assignments as assn_svc
 from src.services import subjects as subj_svc
 from src.services.groups import get_active_group, is_creator
 from src.services.users import get_or_create_user
-from src.utils import format_deadline_display
+from src.utils import ensure_utc, format_deadline_display
 
 router = Router(name="menu_tasks")
 
@@ -75,6 +77,30 @@ async def open_tasks_page(target: CallbackQuery | Message, *, page: int) -> None
     await _render_tasks_page(target, page=page)
 
 
+def _group_by_subject(
+    items: list[Assignment],
+) -> list[tuple[int, list[Assignment]]]:
+    """Группирует задания по subject_id.
+    Сначала subject'ы с ближайшим (минимальным) дедлайном; subject'ы где все
+    дедлайны None — в конце. Внутри subject'а — по дедлайну asc, None — в конце.
+    """
+    by_subject: dict[int, list[Assignment]] = {}
+    for a in items:
+        by_subject.setdefault(a.subject_id, []).append(a)
+
+    INF = datetime.max.replace(tzinfo=UTC)
+
+    def _key(a: Assignment) -> datetime:
+        return ensure_utc(a.deadline) if a.deadline is not None else INF
+
+    sorted_subjects: list[tuple[int, list[Assignment]]] = []
+    for sid, lst in by_subject.items():
+        lst.sort(key=_key)
+        sorted_subjects.append((sid, lst))
+    sorted_subjects.sort(key=lambda kv: _key(kv[1][0]))
+    return sorted_subjects
+
+
 async def _render_tasks_page(callback: CallbackQuery | Message, *, page: int) -> None:
     ctx = await _user_ctx(callback)
     if ctx is None:
@@ -82,33 +108,47 @@ async def _render_tasks_page(callback: CallbackQuery | Message, *, page: int) ->
         return
     user_id, group_id, _tz, _creator = ctx
     active, passed, completed, subj_by_id = await _load_tasks(group_id, user_id)
-    items: list[tuple[str, Assignment]] = [("a", a) for a in active] + [("p", a) for a in passed]
-    if not items:
+
+    if not active and not passed:
         await render(callback, texts.LIST_EMPTY, back_home_kb())
         return
 
-    pages = max(1, (len(items) + _PAGE_SIZE - 1) // _PAGE_SIZE)
-    page = max(0, min(page, pages - 1))
-    chunk = items[page * _PAGE_SIZE : (page + 1) * _PAGE_SIZE]
+    # Плоский список с маркерами секций и subject-заголовков.
+    # Элемент: ("subj", subject_id) — заголовок предмета;
+    #          ("passed", None) — заголовок «Прошедшие»;
+    #          ("a", assignment) / ("p", assignment) — задание.
+    flat: list[tuple[str, object]] = []
+    for sid, lst in _group_by_subject(active):
+        flat.append(("subj", sid))
+        flat.extend(("a", a) for a in lst)
+    if passed:
+        flat.append(("passed", None))
+        flat.extend(("p", a) for a in passed)
 
+    # Пагинация по числу элементов (заголовки тоже считаются — но они без кнопок).
+    pages = max(1, (len(flat) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+    page = max(0, min(page, pages - 1))
+    chunk = flat[page * _PAGE_SIZE : (page + 1) * _PAGE_SIZE]
+
+    text_lines: list[str] = ["📋 Задания"]
     rows: list[list[InlineKeyboardButton]] = []
-    cur_section = ""
-    header_lines: list[str] = []
-    for kind, a in chunk:
-        if kind != cur_section:
-            cur_section = kind
-            header_lines.append(
-                texts.LIST_ACTIVE_HEADER if kind == "a" else texts.LIST_PASSED_HEADER
+    for kind, payload in chunk:
+        if kind == "subj":
+            assert isinstance(payload, int)
+            text_lines.append(f"\n📚 {subj_by_id.get(payload, '?')}")
+        elif kind == "passed":
+            text_lines.append(f"\n{texts.LIST_PASSED_HEADER}")
+        else:
+            assert isinstance(payload, Assignment)
+            is_done = payload.id in completed
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=_short_button_label(payload, subj_by_id, is_done),
+                        callback_data=f"m:task:{payload.id}",
+                    )
+                ]
             )
-        is_done = a.id in completed
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=_short_button_label(a, subj_by_id, is_done),
-                    callback_data=f"m:task:{a.id}",
-                )
-            ]
-        )
 
     nav: list[InlineKeyboardButton] = []
     if page > 0:
@@ -120,8 +160,7 @@ async def _render_tasks_page(callback: CallbackQuery | Message, *, page: int) ->
         rows.append(nav)
 
     rows.append([InlineKeyboardButton(text=texts.DIGEST_BTN, callback_data="m:tasks:digest")])
-    text = "\n".join(["📋 Задания", *header_lines]) if header_lines else "📋 Задания"
-    await render(callback, text, with_back_home(rows))
+    await render(callback, "\n".join(text_lines), with_back_home(rows))
 
 
 @router.callback_query(F.data == "m:tasks:digest")

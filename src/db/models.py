@@ -133,7 +133,7 @@ class Assignment(Base):
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     links: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by_user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

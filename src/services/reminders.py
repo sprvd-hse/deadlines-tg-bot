@@ -159,7 +159,7 @@ async def send_reminder_batch(
             return 0
         assignment, group, subject_name = ctx
         from src.utils import ensure_utc as _ensure_utc
-        if _ensure_utc(assignment.deadline) <= now:
+        if assignment.deadline is None or _ensure_utc(assignment.deadline) <= now:
             return 0
         already = await already_logged_user_ids(
             session, assignment_id=assignment_id, reminder_type=reminder_type
