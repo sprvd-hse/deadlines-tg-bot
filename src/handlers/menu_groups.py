@@ -132,7 +132,8 @@ async def cb_group_switch_pick(callback: CallbackQuery) -> None:
         await callback.answer(texts.ALREADY_ACTIVE)
     else:
         await callback.answer(texts.SWITCHED_GROUP.format(name=group_name))
-    await _render_group_hub(callback)
+    # Перерисовываем сам список с обновлённой ✓ — пользователь видит, что активная сменилась.
+    await cb_group_switch_list(callback)
 
 
 # ============ Создание группы (FSM имени) ============
