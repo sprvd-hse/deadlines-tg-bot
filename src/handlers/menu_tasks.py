@@ -119,8 +119,37 @@ async def _render_tasks_page(callback: CallbackQuery | Message, *, page: int) ->
     if pages > 1:
         rows.append(nav)
 
+    rows.append([InlineKeyboardButton(text=texts.DIGEST_BTN, callback_data="m:tasks:digest")])
     text = "\n".join(["📋 Задания", *header_lines]) if header_lines else "📋 Задания"
     await render(callback, text, with_back_home(rows))
+
+
+@router.callback_query(F.data == "m:tasks:digest")
+async def cb_tasks_digest(callback: CallbackQuery) -> None:
+    from src.db.models import Group as _G
+    from src.services.digest import build_digest_messages
+
+    ctx = await _user_ctx(callback)
+    if ctx is None:
+        await render(callback, texts.NO_ACTIVE_GROUP, back_home_kb())
+        return
+    _user_id, group_id, *_ = ctx
+    async with SessionLocal() as session:
+        group = await session.get(_G, group_id)
+        if group is None:
+            await render(callback, texts.NO_ACTIVE_GROUP, back_home_kb())
+            return
+        messages = await build_digest_messages(session, group)
+
+    if not messages:
+        await render(callback, texts.DIGEST_EMPTY, back_home_kb())
+        return
+    # Первое сообщение редактирует исходное; остальные шлём отдельно.
+    await render(callback, messages[0], back_home_kb())
+    msg = callback.message
+    if isinstance(msg, Message):
+        for chunk in messages[1:]:
+            await msg.answer(chunk)
 
 
 @router.callback_query(F.data == "m:tasks:noop")

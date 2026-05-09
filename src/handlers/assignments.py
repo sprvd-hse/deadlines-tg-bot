@@ -13,6 +13,7 @@ from src.keyboards import (
     ASSIGNMENT_TYPE_LABELS,
     assignment_type_kb,
     confirm_kb,
+    skip_kb,
     subjects_kb,
 )
 from src.scheduler import (
@@ -131,7 +132,14 @@ async def add_title(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(title=title)
     await state.set_state(AddAssignment.waiting_description)
-    await message.answer(texts.ADD_STEP_DESCRIPTION)
+    await message.answer(
+        texts.ADD_STEP_DESCRIPTION, reply_markup=skip_kb("add_desc")
+    )
+
+
+async def _add_after_description(message: Message, state: FSMContext) -> None:
+    await state.set_state(AddAssignment.waiting_deadline)
+    await message.answer(texts.ADD_STEP_DEADLINE)
 
 
 @router.message(AddAssignment.waiting_description, F.text)
@@ -146,8 +154,15 @@ async def add_description(message: Message, state: FSMContext) -> None:
             return
         description = raw
     await state.update_data(description=description)
-    await state.set_state(AddAssignment.waiting_deadline)
-    await message.answer(texts.ADD_STEP_DEADLINE)
+    await _add_after_description(message, state)
+
+
+@router.callback_query(AddAssignment.waiting_description, F.data == "add_desc:skip")
+async def add_description_skip(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(description=None)
+    if isinstance(callback.message, Message):
+        await _add_after_description(callback.message, state)
+    await callback.answer()
 
 
 @router.message(AddAssignment.waiting_deadline, F.text)
@@ -161,7 +176,14 @@ async def add_deadline(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(deadline_iso=deadline_utc.isoformat())
     await state.set_state(AddAssignment.waiting_links)
-    await message.answer(texts.ADD_STEP_LINKS)
+    await message.answer(texts.ADD_STEP_LINKS, reply_markup=skip_kb("add_links"))
+
+
+async def _add_after_links(message: Message, state: FSMContext) -> None:
+    await state.set_state(AddAssignment.waiting_confirm)
+    data = await state.get_data()
+    summary = _build_summary(data)
+    await message.answer(f"{texts.ADD_CONFIRM_HEADER}\n\n{summary}", reply_markup=confirm_kb())
 
 
 @router.message(AddAssignment.waiting_links, F.text)
@@ -175,11 +197,15 @@ async def add_links(message: Message, state: FSMContext) -> None:
             await message.answer(texts.ADD_LINKS_NONE_VALID)
             return
     await state.update_data(links=links)
-    await state.set_state(AddAssignment.waiting_confirm)
+    await _add_after_links(message, state)
 
-    data = await state.get_data()
-    summary = _build_summary(data)
-    await message.answer(f"{texts.ADD_CONFIRM_HEADER}\n\n{summary}", reply_markup=confirm_kb())
+
+@router.callback_query(AddAssignment.waiting_links, F.data == "add_links:skip")
+async def add_links_skip(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(links=[])
+    if isinstance(callback.message, Message):
+        await _add_after_links(callback.message, state)
+    await callback.answer()
 
 
 @router.callback_query(AddAssignment.waiting_confirm, F.data == "assign_confirm:no")
@@ -577,10 +603,48 @@ async def edit_title(message: Message, state: FSMContext) -> None:
             return
         await state.update_data(title=raw)
 
+    await _edit_prompt_description(message, state)
+
+
+async def _edit_prompt_description(message: Message, state: FSMContext) -> None:
     new_data = await state.get_data()
     current_desc = new_data.get("description") or "—"
     await state.set_state(EditAssignment.waiting_description)
-    await message.answer(texts.EDIT_STEP_DESCRIPTION.format(current=current_desc))
+    await message.answer(
+        texts.EDIT_STEP_DESCRIPTION.format(current=current_desc),
+        reply_markup=skip_kb("edit_desc", with_clear=True),
+    )
+
+
+async def _edit_prompt_deadline(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    deadline_utc = datetime.fromisoformat(data["deadline_iso"])
+    current_dl = format_deadline_display(deadline_utc, data["group_tz"])
+    await state.set_state(EditAssignment.waiting_deadline)
+    await message.answer(
+        texts.EDIT_STEP_DEADLINE.format(current=current_dl),
+        reply_markup=skip_kb("edit_deadline"),
+    )
+
+
+async def _edit_prompt_links(message: Message, state: FSMContext) -> None:
+    new_data = await state.get_data()
+    current_links = _links_display(new_data.get("links") or [])
+    await state.set_state(EditAssignment.waiting_links)
+    await message.answer(
+        texts.EDIT_STEP_LINKS.format(current=current_links),
+        reply_markup=skip_kb("edit_links", with_clear=True),
+    )
+
+
+async def _edit_prompt_confirm(message: Message, state: FSMContext) -> None:
+    await state.set_state(EditAssignment.waiting_confirm)
+    data = await state.get_data()
+    summary = _build_summary(data)
+    await message.answer(
+        f"{texts.EDIT_CONFIRM_HEADER}\n\n{summary}",
+        reply_markup=confirm_kb(prefix="edit_confirm", yes_label="✅ Сохранить"),
+    )
 
 
 @router.message(EditAssignment.waiting_description, F.text)
@@ -595,12 +659,21 @@ async def edit_description(message: Message, state: FSMContext) -> None:
             await message.answer(texts.DESCRIPTION_TOO_LONG)
             return
         await state.update_data(description=raw)
+    await _edit_prompt_deadline(message, state)
 
-    data = await state.get_data()
-    deadline_utc = datetime.fromisoformat(data["deadline_iso"])
-    current_dl = format_deadline_display(deadline_utc, data["group_tz"])
-    await state.set_state(EditAssignment.waiting_deadline)
-    await message.answer(texts.EDIT_STEP_DEADLINE.format(current=current_dl))
+
+@router.callback_query(EditAssignment.waiting_description, F.data.startswith("edit_desc:"))
+async def edit_description_btn(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None:
+        await callback.answer()
+        return
+    action = callback.data.rsplit(":", 1)[1]
+    if action == "clear":
+        await state.update_data(description=None)
+    # на skip ничего не меняем — оставляем старое
+    if isinstance(callback.message, Message):
+        await _edit_prompt_deadline(callback.message, state)
+    await callback.answer()
 
 
 @router.message(EditAssignment.waiting_deadline, F.text)
@@ -614,11 +687,14 @@ async def edit_deadline(message: Message, state: FSMContext) -> None:
             await message.answer(texts.ADD_DEADLINE_ERROR.format(error=str(e)))
             return
         await state.update_data(deadline_iso=deadline_utc.isoformat())
+    await _edit_prompt_links(message, state)
 
-    new_data = await state.get_data()
-    current_links = _links_display(new_data.get("links") or [])
-    await state.set_state(EditAssignment.waiting_links)
-    await message.answer(texts.EDIT_STEP_LINKS.format(current=current_links))
+
+@router.callback_query(EditAssignment.waiting_deadline, F.data == "edit_deadline:skip")
+async def edit_deadline_skip(callback: CallbackQuery, state: FSMContext) -> None:
+    if isinstance(callback.message, Message):
+        await _edit_prompt_links(callback.message, state)
+    await callback.answer()
 
 
 @router.message(EditAssignment.waiting_links, F.text)
@@ -634,14 +710,20 @@ async def edit_links(message: Message, state: FSMContext) -> None:
             await message.answer(texts.ADD_LINKS_NONE_VALID)
             return
         await state.update_data(links=links)
+    await _edit_prompt_confirm(message, state)
 
-    await state.set_state(EditAssignment.waiting_confirm)
-    data = await state.get_data()
-    summary = _build_summary(data)
-    await message.answer(
-        f"{texts.EDIT_CONFIRM_HEADER}\n\n{summary}",
-        reply_markup=confirm_kb(prefix="edit_confirm", yes_label="✅ Сохранить"),
-    )
+
+@router.callback_query(EditAssignment.waiting_links, F.data.startswith("edit_links:"))
+async def edit_links_btn(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None:
+        await callback.answer()
+        return
+    action = callback.data.rsplit(":", 1)[1]
+    if action == "clear":
+        await state.update_data(links=[])
+    if isinstance(callback.message, Message):
+        await _edit_prompt_confirm(callback.message, state)
+    await callback.answer()
 
 
 @router.callback_query(EditAssignment.waiting_confirm, F.data == "edit_confirm:no")

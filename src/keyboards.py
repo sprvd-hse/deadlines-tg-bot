@@ -75,8 +75,8 @@ def yes_no_kb(prefix: str, yes_label: str = "Да", no_label: str = "Нет") ->
 # ============ Главное меню (inline-навигация) ============
 
 
-_BTN_BACK = InlineKeyboardButton(text="⬅️ Назад", callback_data="m:home")
-_BTN_HOME = InlineKeyboardButton(text="🏠 Меню", callback_data="m:home")
+# Reply-keyboard под полем ввода уже содержит навигацию,
+# поэтому отдельные «Назад/Меню» в inline убраны.
 
 
 def home_kb(*, has_active_group: bool, is_creator: bool) -> InlineKeyboardMarkup:
@@ -101,12 +101,12 @@ def home_kb(*, has_active_group: bool, is_creator: bool) -> InlineKeyboardMarkup
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def back_home_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[_BTN_HOME]])
+def back_home_kb() -> InlineKeyboardMarkup | None:
+    return None
 
 
-def with_back_home(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[*rows, [_BTN_BACK, _BTN_HOME]])
+def with_back_home(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup | None:
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
 # ============ Reply-keyboard (постоянная под полем ввода) ============
@@ -142,3 +142,15 @@ def home_reply_kb() -> ReplyKeyboardMarkup:
 
 def remove_reply_kb() -> ReplyKeyboardRemove:
     return ReplyKeyboardRemove()
+
+
+def skip_kb(prefix: str, *, with_clear: bool = False) -> InlineKeyboardMarkup:
+    """Кнопка «⏭ Пропустить» (и опционально «🧹 Очистить») для шагов FSM."""
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="⏭ Пропустить", callback_data=f"{prefix}:skip")]
+    ]
+    if with_clear:
+        rows.append(
+            [InlineKeyboardButton(text="🧹 Очистить", callback_data=f"{prefix}:clear")]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
