@@ -19,6 +19,11 @@ class Subjects(StatesGroup):
     waiting_name = State()
 
 
+class GroupOnboarding(StatesGroup):
+    waiting_name = State()
+    waiting_code = State()
+
+
 class EditAssignment(StatesGroup):
     waiting_type = State()
     waiting_subject = State()
