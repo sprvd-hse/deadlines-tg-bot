@@ -64,3 +64,40 @@ def yes_no_kb(prefix: str, yes_label: str = "Да", no_label: str = "Нет") ->
             ]
         ]
     )
+
+
+# ============ Главное меню (inline-навигация) ============
+
+
+_BTN_BACK = InlineKeyboardButton(text="← Назад", callback_data="m:home")
+_BTN_HOME = InlineKeyboardButton(text="🏠 Меню", callback_data="m:home")
+
+
+def home_kb(*, has_active_group: bool, is_creator: bool) -> InlineKeyboardMarkup:
+    if not has_active_group:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="➕ Создать группу", callback_data="m:grp:new")],
+                [InlineKeyboardButton(text="🔑 Присоединиться", callback_data="m:grp:join")],
+                [InlineKeyboardButton(text="❓ Помощь", callback_data="m:help")],
+            ]
+        )
+    rows = [
+        [InlineKeyboardButton(text="📋 Задания", callback_data="m:tasks")],
+        [InlineKeyboardButton(text="➕ Добавить задание", callback_data="m:add")],
+        [InlineKeyboardButton(text="📚 Предметы", callback_data="m:subj")],
+        [InlineKeyboardButton(text="👥 Группа", callback_data="m:grp")],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="m:set")],
+        [InlineKeyboardButton(text="❓ Помощь", callback_data="m:help")],
+    ]
+    if is_creator:
+        rows.insert(4, [InlineKeyboardButton(text="🛠 Админ группы", callback_data="m:adm")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def back_home_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[_BTN_HOME]])
+
+
+def with_back_home(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[*rows, [_BTN_BACK, _BTN_HOME]])

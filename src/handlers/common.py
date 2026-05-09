@@ -4,13 +4,15 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from src import texts
+from src.handlers.menu import open_home
 
 router = Router(name="common")
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message) -> None:
+async def cmd_start(message: Message, state: FSMContext) -> None:
     await message.answer(texts.START)
+    await open_home(message, state)
 
 
 @router.message(Command("help"))
