@@ -15,6 +15,10 @@ class GroupSettings(StatesGroup):
     waiting_tz = State()
 
 
+class Subjects(StatesGroup):
+    waiting_name = State()
+
+
 class EditAssignment(StatesGroup):
     waiting_type = State()
     waiting_subject = State()
