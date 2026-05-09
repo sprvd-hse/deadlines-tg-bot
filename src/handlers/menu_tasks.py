@@ -1,5 +1,6 @@
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src import texts
 from src.db.models import Assignment
@@ -319,18 +320,70 @@ async def cb_task_del_confirm(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.regexp(r"^m:task:\d+:edit$"))
-async def cb_task_edit_stub(callback: CallbackQuery) -> None:
-    if callback.data is None:
+async def cb_task_edit(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or callback.from_user is None:
         await callback.answer()
         return
     assignment_id = int(callback.data.split(":")[2])
-    async with SessionLocal() as session:
-        a = await session.get(Assignment, assignment_id)
-    if a is None:
-        await callback.answer()
+    ctx = await _user_ctx(callback)
+    if ctx is None:
+        await render(callback, texts.NO_ACTIVE_GROUP, back_home_kb())
         return
-    await render(
-        callback,
-        f"Редактирование пока через команду: /edit {a.short_id}",
-        back_home_kb(),
-    )
+    user_id, group_id, _tz, creator_flag = ctx
+
+    async with SessionLocal() as session, session.begin():
+        a = await session.get(Assignment, assignment_id)
+        if a is None or a.group_id != group_id or not a.is_active:
+            await callback.answer(texts.DELETE_NOT_FOUND.format(n="?"), show_alert=True)
+            return
+        if a.created_by_user_id != user_id and not creator_flag:
+            await callback.answer(texts.EDIT_FORBIDDEN, show_alert=True)
+            return
+        group = await get_active_group_obj(session, user_id)
+        if group is None:
+            await callback.answer(texts.NO_ACTIVE_GROUP, show_alert=True)
+            return
+        subjects = await subj_svc.list_subjects(session, group_id)
+        subj_by_id = {s.id: s.name for s in subjects}
+        await state.update_data(
+            assignment_id=a.id,
+            group_id=group.id,
+            group_tz=group.timezone,
+            short_id=a.short_id,
+            type=a.type.value,
+            subject_id=a.subject_id,
+            subject_name=subj_by_id.get(a.subject_id, "?"),
+            title=a.title,
+            description=a.description,
+            links=list(a.links or []),
+            deadline_iso=a.deadline.isoformat(),
+            orig_deadline_iso=a.deadline.isoformat(),
+        )
+        type_value = a.type.value
+
+    from src.db.models import AssignmentType
+    from src.keyboards import assignment_type_kb
+    from src.states import EditAssignment
+
+    current_label = ASSIGNMENT_TYPE_LABELS[AssignmentType(type_value)]
+    await state.set_state(EditAssignment.waiting_type)
+    msg = callback.message
+    kb = assignment_type_kb(prefix="edit_type", keep_label=current_label)
+    if isinstance(msg, Message):
+        try:
+            await msg.edit_text(texts.ADD_STEP_TYPE, reply_markup=kb)
+        except Exception:
+            await msg.answer(texts.ADD_STEP_TYPE, reply_markup=kb)
+    await callback.answer()
+
+
+async def get_active_group_obj(session, user_id: int):
+    from sqlalchemy import select
+
+    from src.db.models import Group, User
+    user = await session.get(User, user_id)
+    if user is None or user.active_group_id is None:
+        return None
+    return (
+        await session.execute(select(Group).where(Group.id == user.active_group_id))
+    ).scalar_one_or_none()
