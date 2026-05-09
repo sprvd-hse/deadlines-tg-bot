@@ -3,7 +3,11 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+)
 
 from src.config import settings
 from src.handlers import (
@@ -70,7 +74,13 @@ async def _setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="cancel", description="Отменить текущий ввод"),
         BotCommand(command="help", description="Справка"),
     ]
+    group_cmds = [
+        BotCommand(command="bind_chat", description="Привязать этот чат к группе"),
+        BotCommand(command="digest", description="Ближайшие дедлайны (14 дней)"),
+        BotCommand(command="help", description="Справка"),
+    ]
     await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
+    await bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
 
 
 if __name__ == "__main__":
