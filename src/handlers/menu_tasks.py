@@ -17,8 +17,6 @@ from src.utils import ensure_utc, format_deadline_display
 
 router = Router(name="menu_tasks")
 
-_PAGE_SIZE = 8
-
 
 async def _user_ctx(callback: CallbackQuery | Message):
     u = callback.from_user
@@ -35,46 +33,30 @@ async def _user_ctx(callback: CallbackQuery | Message):
         return user.id, group.id, group.timezone, creator_flag
 
 
-async def _load_tasks(group_id: int, user_id: int) -> tuple[list[Assignment], list[Assignment], set[int], dict[int, str]]:
+async def _load_tasks(
+    group_id: int,
+) -> tuple[list[Assignment], list[Assignment], dict[int, str]]:
     async with SessionLocal() as session:
         active = await assn_svc.list_active(session, group_id)
         passed = await assn_svc.list_passed(session, group_id)
-        all_ids = [a.id for a in active] + [a.id for a in passed]
-        completed = await assn_svc.completed_ids_for_user(session, user_id, all_ids)
         subjects = await subj_svc.list_subjects(session, group_id)
         subj_by_id = {s.id: s.name for s in subjects}
-    return active, passed, completed, subj_by_id
+    return active, passed, subj_by_id
 
 
-def _row_label(a: Assignment, subj_by_id: dict[int, str], tz_name: str, completed: bool) -> str:
-    marker = "✅ " if completed else ""
-    type_label = ASSIGNMENT_TYPE_LABELS.get(a.type, a.type.value)
-    subject = subj_by_id.get(a.subject_id, "?")
-    deadline = format_deadline_display(a.deadline, tz_name)
-    return f"{marker}#{a.short_id} [{type_label}] {a.title} — {subject} — {deadline}"
-
-
-def _short_button_label(a: Assignment, subj_by_id: dict[int, str], completed: bool) -> str:
-    marker = "✅ " if completed else ""
-    return f"{marker}#{a.short_id} {a.title} ({subj_by_id.get(a.subject_id, '?')})"
+def _short_button_label(a: Assignment, subj_by_id: dict[int, str]) -> str:
+    return f"#{a.short_id} {a.title} ({subj_by_id.get(a.subject_id, '?')})"
 
 
 @router.callback_query(F.data == "m:tasks")
 async def cb_tasks(callback: CallbackQuery) -> None:
-    await _render_tasks_page(callback, page=0)
+    await _render_tasks(callback)
 
 
-@router.callback_query(F.data.regexp(r"^m:tasks:p:\d+$"))
-async def cb_tasks_page(callback: CallbackQuery) -> None:
-    if callback.data is None:
-        await callback.answer()
-        return
-    page = int(callback.data.rsplit(":", 1)[1])
-    await _render_tasks_page(callback, page=page)
-
-
-async def open_tasks_page(target: CallbackQuery | Message, *, page: int) -> None:
-    await _render_tasks_page(target, page=page)
+async def open_tasks_page(target: CallbackQuery | Message, *, page: int = 0) -> None:
+    # page оставлен для совместимости с reply-keyboard роутером.
+    _ = page
+    await _render_tasks(target)
 
 
 def _group_by_subject(
@@ -101,63 +83,63 @@ def _group_by_subject(
     return sorted_subjects
 
 
-async def _render_tasks_page(callback: CallbackQuery | Message, *, page: int) -> None:
+async def _render_tasks(callback: CallbackQuery | Message) -> None:
     ctx = await _user_ctx(callback)
     if ctx is None:
         await render(callback, texts.NO_ACTIVE_GROUP, back_home_kb())
         return
-    user_id, group_id, _tz, _creator = ctx
-    active, passed, completed, subj_by_id = await _load_tasks(group_id, user_id)
+    _user_id, group_id, tz_name, _creator = ctx
+    active, passed, subj_by_id = await _load_tasks(group_id)
 
     if not active and not passed:
         await render(callback, texts.LIST_EMPTY, back_home_kb())
         return
 
-    # Плоский список с маркерами секций и subject-заголовков.
-    # Элемент: ("subj", subject_id) — заголовок предмета;
-    #          ("passed", None) — заголовок «Прошедшие»;
-    #          ("a", assignment) / ("p", assignment) — задание.
-    flat: list[tuple[str, object]] = []
-    for sid, lst in _group_by_subject(active):
-        flat.append(("subj", sid))
-        flat.extend(("a", a) for a in lst)
-    if passed:
-        flat.append(("passed", None))
-        flat.extend(("p", a) for a in passed)
-
-    # Пагинация по числу элементов (заголовки тоже считаются — но они без кнопок).
-    pages = max(1, (len(flat) + _PAGE_SIZE - 1) // _PAGE_SIZE)
-    page = max(0, min(page, pages - 1))
-    chunk = flat[page * _PAGE_SIZE : (page + 1) * _PAGE_SIZE]
-
     text_lines: list[str] = ["📋 Задания"]
     rows: list[list[InlineKeyboardButton]] = []
-    for kind, payload in chunk:
-        if kind == "subj":
-            assert isinstance(payload, int)
-            text_lines.append(f"\n📚 {subj_by_id.get(payload, '?')}")
-        elif kind == "passed":
-            text_lines.append(f"\n{texts.LIST_PASSED_HEADER}")
-        else:
-            assert isinstance(payload, Assignment)
-            is_done = payload.id in completed
+
+    # Сначала плоский список всех активных по дедлайну (asc, NULL в конце).
+    if active:
+        INF = datetime.max.replace(tzinfo=UTC)
+        flat_active = sorted(
+            active,
+            key=lambda a: ensure_utc(a.deadline) if a.deadline is not None else INF,
+        )
+        text_lines.append("\nВсе открытые:")
+        for a in flat_active:
             rows.append(
                 [
                     InlineKeyboardButton(
-                        text=_short_button_label(payload, subj_by_id, is_done),
-                        callback_data=f"m:task:{payload.id}",
+                        text=_short_button_label(a, subj_by_id),
+                        callback_data=f"m:task:{a.id}",
                     )
                 ]
             )
 
-    nav: list[InlineKeyboardButton] = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"m:tasks:p:{page - 1}"))
-    nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="m:tasks:noop"))
-    if page < pages - 1:
-        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"m:tasks:p:{page + 1}"))
-    if pages > 1:
-        rows.append(nav)
+        # Ниже — текстовая сводка по предметам.
+        text_lines.append("\n📚 По предметам:")
+        for sid, lst in _group_by_subject(active):
+            name = subj_by_id.get(sid, "?")
+            datetimed = [a for a in lst if a.deadline is not None]
+            no_date = len(lst) - len(datetimed)
+            extra = ""
+            if datetimed:
+                nearest = format_deadline_display(datetimed[0].deadline, tz_name)
+                extra = f", ближайший {nearest}"
+            no_date_str = f", без даты: {no_date}" if no_date else ""
+            text_lines.append(f"• {name} — {len(lst)}{extra}{no_date_str}")
+
+    if passed:
+        text_lines.append(f"\n{texts.LIST_PASSED_HEADER}")
+        for a in passed:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=_short_button_label(a, subj_by_id),
+                        callback_data=f"m:task:{a.id}",
+                    )
+                ]
+            )
 
     rows.append([InlineKeyboardButton(text=texts.DIGEST_BTN, callback_data="m:tasks:digest")])
     await render(callback, "\n".join(text_lines), with_back_home(rows))
@@ -183,17 +165,11 @@ async def cb_tasks_digest(callback: CallbackQuery) -> None:
     if not messages:
         await render(callback, texts.DIGEST_EMPTY, back_home_kb())
         return
-    # Первое сообщение редактирует исходное; остальные шлём отдельно.
     await render(callback, messages[0], back_home_kb())
     msg = callback.message
     if isinstance(msg, Message):
         for chunk in messages[1:]:
             await msg.answer(chunk)
-
-
-@router.callback_query(F.data == "m:tasks:noop")
-async def cb_tasks_noop(callback: CallbackQuery) -> None:
-    await callback.answer()
 
 
 @router.callback_query(F.data.regexp(r"^m:task:\d+$"))
@@ -219,21 +195,17 @@ async def _render_task_card(callback: CallbackQuery, assignment_id: int) -> None
             return
         subjects = await subj_svc.list_subjects(session, group_id)
         subj_by_id = {s.id: s.name for s in subjects}
-        completed = await assn_svc.completed_ids_for_user(session, user_id, [a.id])
 
-    is_done = a.id in completed
     can_modify = (a.created_by_user_id == user_id) or creator_flag
     type_label = ASSIGNMENT_TYPE_LABELS.get(a.type, a.type.value)
     subj_name = subj_by_id.get(a.subject_id, "?")
     deadline = format_deadline_display(a.deadline, tz_name)
-    state_str = "✅ выполнено" if is_done else "○ не выполнено"
     active_str = "" if a.is_active else "\n(удалено)"
 
     lines = [
         f"#{a.short_id} [{type_label}] {a.title}",
         f"Предмет: {subj_name}",
-        f"Дедлайн: {deadline}",
-        f"Статус: {state_str}{active_str}",
+        f"Дедлайн: {deadline}{active_str}",
     ]
     if a.description:
         lines.append("")
@@ -243,93 +215,22 @@ async def _render_task_card(callback: CallbackQuery, assignment_id: int) -> None
         lines.extend(a.links)
 
     rows: list[list[InlineKeyboardButton]] = []
-    if a.is_active:
-        if is_done:
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text="🔄 Снять отметку",
-                        callback_data=f"m:task:{a.id}:undone",
-                    )
-                ]
-            )
-        else:
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text="✅ Отметить выполненным",
-                        callback_data=f"m:task:{a.id}:done",
-                    )
-                ]
-            )
-        if can_modify:
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text="✏️ Редактировать",
-                        callback_data=f"m:task:{a.id}:edit",
-                    ),
-                    InlineKeyboardButton(
-                        text="🗑 Удалить",
-                        callback_data=f"m:task:{a.id}:del",
-                    ),
-                ]
-            )
+    if a.is_active and can_modify:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✏️ Редактировать",
+                    callback_data=f"m:task:{a.id}:edit",
+                ),
+                InlineKeyboardButton(
+                    text="🗑 Удалить",
+                    callback_data=f"m:task:{a.id}:del",
+                ),
+            ]
+        )
     rows.append([InlineKeyboardButton(text="📋 К списку", callback_data="m:tasks")])
 
     await render(callback, "\n".join(lines), with_back_home(rows))
-
-
-@router.callback_query(F.data.regexp(r"^m:task:\d+:done$"))
-async def cb_task_done(callback: CallbackQuery) -> None:
-    if callback.data is None or callback.from_user is None:
-        await callback.answer()
-        return
-    assignment_id = int(callback.data.split(":")[2])
-    ctx = await _user_ctx(callback)
-    if ctx is None:
-        await callback.answer(texts.NO_ACTIVE_GROUP, show_alert=True)
-        return
-    user_id, group_id, *_ = ctx
-    async with SessionLocal() as session, session.begin():
-        a = await session.get(Assignment, assignment_id)
-        if a is None or a.group_id != group_id or not a.is_active:
-            await callback.answer()
-            return
-        status = await assn_svc.mark_completed(
-            session, group_id=group_id, short_id=a.short_id, user_id=user_id
-        )
-    if status == "already":
-        await callback.answer("Уже отмечено")
-    elif status == "ok":
-        await callback.answer("✅ Отмечено")
-    await _render_task_card(callback, assignment_id)
-
-
-@router.callback_query(F.data.regexp(r"^m:task:\d+:undone$"))
-async def cb_task_undone(callback: CallbackQuery) -> None:
-    if callback.data is None or callback.from_user is None:
-        await callback.answer()
-        return
-    assignment_id = int(callback.data.split(":")[2])
-    ctx = await _user_ctx(callback)
-    if ctx is None:
-        await callback.answer(texts.NO_ACTIVE_GROUP, show_alert=True)
-        return
-    user_id, group_id, *_ = ctx
-    async with SessionLocal() as session, session.begin():
-        a = await session.get(Assignment, assignment_id)
-        if a is None or a.group_id != group_id or not a.is_active:
-            await callback.answer()
-            return
-        status = await assn_svc.unmark_completed(
-            session, group_id=group_id, short_id=a.short_id, user_id=user_id
-        )
-    if status == "not_marked":
-        await callback.answer("Отметки не было")
-    else:
-        await callback.answer("Отметка снята")
-    await _render_task_card(callback, assignment_id)
 
 
 @router.callback_query(F.data.regexp(r"^m:task:\d+:del$"))
@@ -380,7 +281,7 @@ async def cb_task_del_confirm(callback: CallbackQuery) -> None:
     if status == "ok":
         cancel_assignment_reminders(assignment_id)
         await callback.answer("Удалено")
-        await _render_tasks_page(callback, page=0)
+        await _render_tasks(callback)
         return
     if status == "forbidden":
         await callback.answer(texts.DELETE_FORBIDDEN, show_alert=True)
@@ -428,8 +329,8 @@ async def cb_task_edit(callback: CallbackQuery, state: FSMContext) -> None:
             title=a.title,
             description=a.description,
             links=list(a.links or []),
-            deadline_iso=a.deadline.isoformat(),
-            orig_deadline_iso=a.deadline.isoformat(),
+            deadline_iso=a.deadline.isoformat() if a.deadline is not None else None,
+            orig_deadline_iso=a.deadline.isoformat() if a.deadline is not None else None,
         )
         type_value = a.type.value
 

@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import (
     Assignment,
-    AssignmentCompletion,
     AssignmentType,
     Group,
     GroupMember,
@@ -82,18 +81,7 @@ def build_reminder_text(
 async def recipients_for(
     session: AsyncSession, assignment: Assignment
 ) -> list[User]:
-    """Возвращает участников группы, которым нужно слать напоминание:
-    personal_reminders_enabled=True и без AssignmentCompletion.
-    """
-    completed_user_ids = set(
-        (
-            await session.execute(
-                select(AssignmentCompletion.user_id).where(
-                    AssignmentCompletion.assignment_id == assignment.id
-                )
-            )
-        ).scalars()
-    )
+    """Участники группы с personal_reminders_enabled=True."""
     rows = (
         await session.execute(
             select(User)
@@ -104,7 +92,7 @@ async def recipients_for(
             )
         )
     ).scalars()
-    return [u for u in rows if u.id not in completed_user_ids]
+    return list(rows)
 
 
 async def already_logged_user_ids(

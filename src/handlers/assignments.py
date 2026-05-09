@@ -444,62 +444,6 @@ def _parse_short_id(raw: str) -> int | None:
         return None
 
 
-@router.message(Command("done"))
-async def cmd_done(message: Message, command: CommandObject) -> None:
-    meta = _user_meta(message)
-    if meta is None:
-        return
-    short_id = _parse_short_id(command.args or "")
-    if short_id is None:
-        await message.answer(texts.USAGE_DONE)
-        return
-    tg_id, username, full_name = meta
-    async with SessionLocal() as session, session.begin():
-        user = await get_or_create_user(session, tg_id, username, full_name)
-        group = await get_active_group(session, user)
-        if group is None:
-            await message.answer(texts.NO_ACTIVE_GROUP)
-            return
-        status = await assn_svc.mark_completed(
-            session, group_id=group.id, short_id=short_id, user_id=user.id
-        )
-
-    if status == "not_found":
-        await message.answer(texts.DONE_NOT_FOUND.format(n=short_id))
-    elif status == "already":
-        await message.answer(texts.DONE_ALREADY.format(n=short_id))
-    else:
-        await message.answer(texts.DONE_OK.format(n=short_id))
-
-
-@router.message(Command("undone"))
-async def cmd_undone(message: Message, command: CommandObject) -> None:
-    meta = _user_meta(message)
-    if meta is None:
-        return
-    short_id = _parse_short_id(command.args or "")
-    if short_id is None:
-        await message.answer(texts.USAGE_UNDONE)
-        return
-    tg_id, username, full_name = meta
-    async with SessionLocal() as session, session.begin():
-        user = await get_or_create_user(session, tg_id, username, full_name)
-        group = await get_active_group(session, user)
-        if group is None:
-            await message.answer(texts.NO_ACTIVE_GROUP)
-            return
-        status = await assn_svc.unmark_completed(
-            session, group_id=group.id, short_id=short_id, user_id=user.id
-        )
-
-    if status == "not_found":
-        await message.answer(texts.DONE_NOT_FOUND.format(n=short_id))
-    elif status == "not_marked":
-        await message.answer(texts.UNDONE_NOT_MARKED.format(n=short_id))
-    else:
-        await message.answer(texts.UNDONE_OK.format(n=short_id))
-
-
 # ============ /edit FSM ============
 
 
