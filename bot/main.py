@@ -4,7 +4,7 @@ import logging
 from aiogram import Bot, Dispatcher
 
 from bot.config import settings
-from bot.handlers import common, groups
+from bot.handlers import assignments, common, groups, subjects
 
 
 async def main() -> None:
@@ -18,6 +18,8 @@ async def main() -> None:
     dp = Dispatcher()
     dp.include_router(common.router)
     dp.include_router(groups.router)
+    dp.include_router(subjects.router)
+    dp.include_router(assignments.router)
 
     me = await bot.get_me()
     logger.info("Запуск бота @%s (id=%s)", me.username, me.id)

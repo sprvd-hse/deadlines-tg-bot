@@ -116,6 +116,25 @@ async def switch_active_group(
     return group
 
 
+async def get_active_group(session: AsyncSession, user: User) -> Group | None:
+    if user.active_group_id is None:
+        return None
+    return (
+        await session.execute(select(Group).where(Group.id == user.active_group_id))
+    ).scalar_one_or_none()
+
+
+async def is_creator(session: AsyncSession, user_id: int, group_id: int) -> bool:
+    role = (
+        await session.execute(
+            select(GroupMember.role).where(
+                GroupMember.user_id == user_id, GroupMember.group_id == group_id
+            )
+        )
+    ).scalar_one_or_none()
+    return role == MemberRole.creator
+
+
 async def _generate_unique_invite_code(session: AsyncSession) -> str:
     for _ in range(_INVITE_GENERATION_RETRIES):
         code = generate_invite_code()
