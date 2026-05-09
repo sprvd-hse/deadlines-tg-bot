@@ -1,6 +1,6 @@
 import contextlib
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
@@ -126,10 +126,19 @@ async def bootstrap_from_db() -> None:
             )
 
 
-def _current_slot_start_utc(group: Group, now_utc: datetime) -> datetime:
-    """UTC-таймстамп начала текущего часового слота дайджеста (минута=0 в TZ группы)."""
-    local = now_utc.astimezone(ZoneInfo(group.timezone))
-    slot_local = local.replace(minute=0, second=0, microsecond=0)
+def _last_digest_slot_utc(group: Group, now_utc: datetime) -> datetime:
+    """Последнее наступление (digest_day, digest_hour) в TZ группы, не позднее now_utc.
+    Возвращает aware UTC-таймстамп начала слота.
+    """
+    tz = ZoneInfo(group.timezone)
+    local = now_utc.astimezone(tz)
+    today_slot = local.replace(
+        hour=group.digest_hour, minute=0, second=0, microsecond=0
+    )
+    days_since = (local.weekday() - group.digest_day) % 7
+    slot_local = today_slot - timedelta(days=days_since)
+    if slot_local > local:
+        slot_local -= timedelta(days=7)
     return slot_local.astimezone(UTC)
 
 
@@ -142,13 +151,10 @@ async def _digest_tick() -> None:
 
     for group in groups:
         try:
-            local = now_utc.astimezone(ZoneInfo(group.timezone))
+            slot_start = _last_digest_slot_utc(group, now_utc)
         except Exception:
             logger.exception("Невалидная TZ у группы %s", group.id)
             continue
-        if local.weekday() != group.digest_day or local.hour != group.digest_hour:
-            continue
-        slot_start = _current_slot_start_utc(group, now_utc)
         last_sent = group.digest_last_sent_at
         if last_sent is not None and last_sent.tzinfo is None:
             last_sent = last_sent.replace(tzinfo=UTC)
@@ -160,8 +166,12 @@ async def _digest_tick() -> None:
             logger.exception("Ошибка дайджеста группы %s", group.id)
             continue
         if not sent:
+            # Нечего отправлять — всё равно фиксируем слот, чтобы не пытаться повторно.
+            async with SessionLocal() as session, session.begin():
+                g = await session.get(Group, group.id)
+                if g is not None:
+                    g.digest_last_sent_at = now_utc
             continue
-        # Помечаем слот как отправленный — идемпотентность поверх рестартов.
         async with SessionLocal() as session, session.begin():
             g = await session.get(Group, group.id)
             if g is not None:
@@ -206,6 +216,11 @@ async def start_scheduler(bot: Bot) -> AsyncIOScheduler:
     )
     _scheduler.start()
     await bootstrap_from_db()
+    # Догон пропущенного дайджеста при старте — не ждём ближайшего часа.
+    try:
+        await _digest_tick()
+    except Exception:
+        logger.exception("Ошибка стартового _digest_tick")
     return _scheduler
 
 

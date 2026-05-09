@@ -1,6 +1,6 @@
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import Assignment, Subject
@@ -15,12 +15,19 @@ async def list_subjects(session: AsyncSession, group_id: int) -> list[Subject]:
     return list(rows.scalars())
 
 
+def _ci(name: str):
+    return func.lower(name)
+
+
 async def add_subject(session: AsyncSession, group_id: int, name: str) -> Subject | None:
-    """Создаёт предмет; возвращает None, если предмет с таким именем уже есть."""
+    """Создаёт предмет; возвращает None, если предмет с таким именем уже есть (без учёта регистра)."""
     name = name.strip()
     existing = (
         await session.execute(
-            select(Subject).where(Subject.group_id == group_id, Subject.name == name)
+            select(Subject).where(
+                Subject.group_id == group_id,
+                func.lower(Subject.name) == _ci(name),
+            )
         )
     ).scalar_one_or_none()
     if existing is not None:
@@ -35,7 +42,10 @@ async def delete_subject(session: AsyncSession, group_id: int, name: str) -> Del
     """Удаляет предмет, если на нём нет активных заданий."""
     subject = (
         await session.execute(
-            select(Subject).where(Subject.group_id == group_id, Subject.name == name.strip())
+            select(Subject).where(
+                Subject.group_id == group_id,
+                func.lower(Subject.name) == _ci(name.strip()),
+            )
         )
     ).scalar_one_or_none()
     if subject is None:
@@ -56,6 +66,9 @@ async def delete_subject(session: AsyncSession, group_id: int, name: str) -> Del
 async def get_subject_by_name(session: AsyncSession, group_id: int, name: str) -> Subject | None:
     return (
         await session.execute(
-            select(Subject).where(Subject.group_id == group_id, Subject.name == name.strip())
+            select(Subject).where(
+                Subject.group_id == group_id,
+                func.lower(Subject.name) == _ci(name.strip()),
+            )
         )
     ).scalar_one_or_none()

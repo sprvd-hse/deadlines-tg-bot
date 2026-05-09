@@ -36,6 +36,11 @@ def check_join_rate_limit(tg_user_id: int) -> bool:
     if len(window) >= _JOIN_RATE_MAX:
         return False
     window.append(now)
+    # Лёгкая чистка пустых окон у других пользователей, чтобы dict не рос.
+    if len(_join_attempts) > 1024:
+        for uid, w in list(_join_attempts.items()):
+            if uid != tg_user_id and (not w or now - w[-1] >= _JOIN_RATE_WINDOW):
+                _join_attempts.pop(uid, None)
     return True
 
 

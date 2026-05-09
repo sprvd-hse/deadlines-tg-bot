@@ -18,6 +18,7 @@ from bot.config import settings
 from bot.db.models import MemberRole
 from bot.db.session import SessionLocal
 from bot.keyboards import members_kb, yes_no_kb
+from bot.scheduler import cancel_assignment_reminders
 from bot.services.groups import (
     check_join_rate_limit,
     create_group,
@@ -359,10 +360,21 @@ async def cb_delete_group_step2(callback: CallbackQuery) -> None:
         if not await is_creator(session, user.id, group_id):
             await callback.answer(texts.CREATOR_ONLY, show_alert=True)
             return
+        from sqlalchemy import select as _select
+
+        from bot.db.models import Assignment as _A
         from bot.db.models import Group as _G
         group = await session.get(_G, group_id)
         group_name = group.name if group is not None else ""
+        assignment_ids = list(
+            (
+                await session.execute(_select(_A.id).where(_A.group_id == group_id))
+            ).scalars()
+        )
         await delete_group(session, group_id)
+
+    for aid in assignment_ids:
+        cancel_assignment_reminders(aid)
 
     if isinstance(callback.message, Message):
         await callback.message.answer(texts.DELETE_GROUP_OK.format(name=group_name))
@@ -376,14 +388,22 @@ async def _bot_can_send_in(bot, chat_id: int) -> bool:
     try:
         me = await bot.get_me()
         member = await bot.get_chat_member(chat_id, me.id)
+        chat = await bot.get_chat(chat_id)
     except Exception:
         return False
     status = getattr(member, "status", "")
+    if status in ("left", "kicked"):
+        return False
+    if status == "restricted":
+        # У ChatMemberRestricted есть can_send_messages.
+        return bool(getattr(member, "can_send_messages", False))
     if status in ("administrator", "creator"):
         return True
-    if status == "member":
-        return getattr(member, "can_send_messages", True) is not False
-    return False
+    # status == "member" — смотрим chat-wide дефолтные права.
+    perms = getattr(chat, "permissions", None)
+    if perms is None:
+        return True
+    return getattr(perms, "can_send_messages", True) is not False
 
 
 @router.message(Command("bind_chat"))
@@ -742,9 +762,27 @@ async def cmd_leave(message: Message) -> None:
             await message.answer(texts.LEAVE_NO_GROUP)
             return
         group_name = group.name
+        from sqlalchemy import select as _select
+
+        from bot.db.models import Assignment as _A
+        assignment_ids_to_cancel: list[int] = []
+        # Если уйдём как одиночный creator — соберём id заранее, чтобы потом отменить job-ы.
+        members = await list_members(session, group.id)
+        if len(members) == 1:
+            assignment_ids_to_cancel = list(
+                (
+                    await session.execute(
+                        _select(_A.id).where(_A.group_id == group.id)
+                    )
+                ).scalars()
+            )
         status = await leave_group(session, group_id=group.id, user_id=user.id)
         if status in ("left", "group_deleted"):
             user.active_group_id = None
+
+    if status == "group_deleted":
+        for aid in assignment_ids_to_cancel:
+            cancel_assignment_reminders(aid)
 
     if status == "need_transfer":
         await message.answer(texts.LEAVE_NEED_TRANSFER)
