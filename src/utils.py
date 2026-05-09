@@ -39,12 +39,17 @@ def parse_links(raw: str) -> list[str]:
     return [p for p in parts if p and _LINK_RE.match(p)]
 
 
+def ensure_utc(dt: datetime) -> datetime:
+    """SQLite через SQLAlchemy теряет tzinfo. Naive значения трактуем как UTC."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 def format_deadline_display(
     deadline_utc: datetime, tz_name: str, now: datetime | None = None
 ) -> str:
     """Возвращает строку вида '15.12 23:59 (через 14 часов)' / '... (просрочено на 2 дня)'."""
     tz = ZoneInfo(tz_name)
-    local = deadline_utc.astimezone(tz)
+    local = ensure_utc(deadline_utc).astimezone(tz)
     now_local = (now or datetime.now(tz=UTC)).astimezone(tz)
 
     if local.year == now_local.year:

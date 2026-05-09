@@ -15,6 +15,7 @@ from src.services.reminders import (
     offsets_for,
     send_reminder_batch,
 )
+from src.utils import ensure_utc
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ def schedule_assignment_reminders(assignment: Assignment, *, now_utc: datetime |
         return
     now = now_utc or datetime.now(tz=UTC)
     for rtype, offset in offsets_for(assignment.type):
-        run_at = assignment.deadline - offset
+        run_at = ensure_utc(assignment.deadline) - offset
         if run_at <= now:
             continue
         _scheduler.add_job(
@@ -102,7 +103,7 @@ async def bootstrap_from_db() -> None:
 
     for a in assignments:
         for rtype, offset in offsets_for(a.type):
-            run_at = a.deadline - offset
+            run_at = ensure_utc(a.deadline) - offset
             if run_at > now:
                 _scheduler.add_job(
                     _fire_reminder,
@@ -115,7 +116,7 @@ async def bootstrap_from_db() -> None:
                 )
                 continue
             # Recovery: время напоминания прошло. Шлём сейчас, если до дедлайна ≥ 30 минут.
-            if a.deadline - now < RECOVERY_MIN_LEAD:
+            if ensure_utc(a.deadline) - now < RECOVERY_MIN_LEAD:
                 continue
             await send_reminder_batch(
                 SessionLocal,
