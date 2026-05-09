@@ -24,11 +24,16 @@ HELP = (
     "/add_subject <название> — добавить предмет\n"
     "/delete_subject <название> — удалить предмет (если нет активных заданий)\n"
     "\n"
+    "/settings — личные настройки в активной группе\n"
+    "/leave — выйти из активной группы\n"
+    "\n"
     "Только для creator группы:\n"
     "/transfer_ownership — передать роль создателя\n"
     "/delete_group — удалить группу\n"
     "/bind_chat — привязать групповой чат для дайджестов (в чате)\n"
     "/unbind_chat — отвязать чат\n"
+    "/group_settings — TZ, день и час дайджеста\n"
+    "/regenerate_code — перевыпустить invite-код\n"
     "\n"
     "/help — эта справка"
 )
@@ -170,3 +175,37 @@ BIND_CHAT_CANCELLED = "Привязка отменена."
 
 UNBIND_CHAT_NONE = "У группы нет привязанного чата."
 UNBIND_CHAT_OK = "Чат отвязан от группы «{group}»."
+
+SETTINGS_HEADER = "Личные настройки в группе «{group}»:\nЛичные напоминания: {state}"
+SETTINGS_TOGGLE_ON = "Включить напоминания"
+SETTINGS_TOGGLE_OFF = "Выключить напоминания"
+SETTINGS_REMINDERS_ON = "включены"
+SETTINGS_REMINDERS_OFF = "выключены"
+SETTINGS_UPDATED = "Настройки обновлены."
+
+GROUP_SETTINGS_HEADER = (
+    "Настройки группы «{group}»:\n"
+    "TZ: {tz}\n"
+    "Дайджест: {weekday} в {hour:02d}:00"
+)
+GROUP_SETTINGS_PICK_TZ = "Изменить TZ"
+GROUP_SETTINGS_PICK_DAY = "День дайджеста"
+GROUP_SETTINGS_PICK_HOUR = "Час дайджеста"
+GROUP_SETTINGS_TZ_PROMPT = (
+    "Введи название TZ в формате IANA, например: Europe/Vilnius, Europe/Moscow, Asia/Tbilisi."
+)
+GROUP_SETTINGS_TZ_INVALID = "Не распознал TZ. Пример: Europe/Vilnius."
+GROUP_SETTINGS_TZ_OK = "TZ обновлена: {tz}."
+GROUP_SETTINGS_DAY_PROMPT = "Выбери день недели для дайджеста:"
+GROUP_SETTINGS_HOUR_PROMPT = "Выбери час дайджеста (по локальному времени группы):"
+GROUP_SETTINGS_DAY_OK = "День дайджеста: {weekday}."
+GROUP_SETTINGS_HOUR_OK = "Час дайджеста: {hour:02d}:00."
+
+REGENERATE_CODE_OK = "Новый invite-код: {code}\n\nСтарый больше не работает."
+
+LEAVE_NEED_TRANSFER = (
+    "Ты — создатель группы и в ней есть другие участники. Сначала выполни /transfer_ownership."
+)
+LEAVE_OK = "Ты вышел из группы «{group}»."
+LEAVE_DELETED = "Ты был единственным участником группы «{group}» — она удалена."
+LEAVE_NO_GROUP = "Ты не состоишь в активной группе."

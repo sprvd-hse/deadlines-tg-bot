@@ -11,6 +11,10 @@ class AddAssignment(StatesGroup):
     waiting_confirm = State()
 
 
+class GroupSettings(StatesGroup):
+    waiting_tz = State()
+
+
 class EditAssignment(StatesGroup):
     waiting_type = State()
     waiting_subject = State()

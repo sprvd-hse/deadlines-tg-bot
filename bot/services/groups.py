@@ -9,6 +9,7 @@ from bot.utils import generate_invite_code
 
 JoinStatus = Literal["ok", "not_found", "already_member"]
 TransferStatus = Literal["ok", "not_member", "same_user"]
+LeaveStatus = Literal["left", "group_deleted", "need_transfer", "not_member"]
 
 _INVITE_GENERATION_RETRIES = 5
 
@@ -178,6 +179,59 @@ async def transfer_ownership(
         current_member.role = MemberRole.member
     new_member.role = MemberRole.creator
     return "ok"
+
+
+async def regenerate_invite_code(session: AsyncSession, group: Group) -> str:
+    code = await _generate_unique_invite_code(session)
+    group.invite_code = code
+    return code
+
+
+async def get_member(
+    session: AsyncSession, *, group_id: int, user_id: int
+) -> GroupMember | None:
+    return (
+        await session.execute(
+            select(GroupMember).where(
+                GroupMember.group_id == group_id, GroupMember.user_id == user_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def set_personal_reminders(
+    session: AsyncSession, *, group_id: int, user_id: int, enabled: bool
+) -> bool:
+    """Устанавливает personal_reminders_enabled, возвращает новое значение."""
+    member = await get_member(session, group_id=group_id, user_id=user_id)
+    if member is None:
+        return enabled
+    member.personal_reminders_enabled = enabled
+    return enabled
+
+
+async def leave_group(
+    session: AsyncSession, *, group_id: int, user_id: int
+) -> LeaveStatus:
+    member = await get_member(session, group_id=group_id, user_id=user_id)
+    if member is None:
+        return "not_member"
+    members_count = (
+        await session.execute(
+            select(GroupMember).where(GroupMember.group_id == group_id)
+        )
+    ).all()
+    if member.role == MemberRole.creator and len(members_count) > 1:
+        return "need_transfer"
+    if len(members_count) == 1:
+        await session.execute(delete(Group).where(Group.id == group_id))
+        return "group_deleted"
+    await session.execute(
+        delete(GroupMember).where(
+            GroupMember.group_id == group_id, GroupMember.user_id == user_id
+        )
+    )
+    return "left"
 
 
 async def delete_group(session: AsyncSession, group_id: int) -> None:

@@ -1,5 +1,8 @@
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -20,14 +23,19 @@ from bot.services.groups import (
     create_group,
     delete_group,
     get_active_group,
+    get_member,
     is_creator,
     join_group,
+    leave_group,
     list_members,
     list_user_groups,
+    regenerate_invite_code,
+    set_personal_reminders,
     switch_active_group,
     transfer_ownership,
 )
 from bot.services.users import get_or_create_user
+from bot.states import GroupSettings
 from bot.utils import normalize_invite_code
 
 router = Router(name="groups")
@@ -474,3 +482,275 @@ async def cmd_unbind_chat(message: Message) -> None:
         group_name = group.name
 
     await message.answer(texts.UNBIND_CHAT_OK.format(group=group_name))
+
+
+# ============ /settings ============
+
+
+_WEEKDAYS_RU = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+
+
+def _settings_kb(enabled: bool) -> InlineKeyboardMarkup:
+    label = texts.SETTINGS_TOGGLE_OFF if enabled else texts.SETTINGS_TOGGLE_ON
+    new_value = "0" if enabled else "1"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=label, callback_data=f"settings_pr:{new_value}")]]
+    )
+
+
+@router.message(Command("settings"))
+async def cmd_settings(message: Message) -> None:
+    if message.from_user is None:
+        return
+    tg_id, username, full_name = _user_meta(message.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None:
+            await message.answer(texts.NO_ACTIVE_GROUP)
+            return
+        member = await get_member(session, group_id=group.id, user_id=user.id)
+        if member is None:
+            await message.answer(texts.NOT_A_MEMBER)
+            return
+        enabled = member.personal_reminders_enabled
+        group_name = group.name
+
+    state_str = texts.SETTINGS_REMINDERS_ON if enabled else texts.SETTINGS_REMINDERS_OFF
+    await message.answer(
+        texts.SETTINGS_HEADER.format(group=group_name, state=state_str),
+        reply_markup=_settings_kb(enabled),
+    )
+
+
+@router.callback_query(F.data.regexp(r"^settings_pr:[01]$"))
+async def cb_settings_toggle(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None:
+        await callback.answer()
+        return
+    new_value = callback.data.split(":", 1)[1] == "1"
+    tg_id, username, full_name = _user_meta(callback.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None:
+            await callback.answer(texts.NO_ACTIVE_GROUP, show_alert=True)
+            return
+        await set_personal_reminders(
+            session, group_id=group.id, user_id=user.id, enabled=new_value
+        )
+
+    state_str = texts.SETTINGS_REMINDERS_ON if new_value else texts.SETTINGS_REMINDERS_OFF
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            texts.SETTINGS_HEADER.format(group=group.name, state=state_str),
+            reply_markup=_settings_kb(new_value),
+        )
+    await callback.answer(texts.SETTINGS_UPDATED)
+
+
+# ============ /group_settings, /regenerate_code ============
+
+
+def _group_settings_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=texts.GROUP_SETTINGS_PICK_TZ, callback_data="gs:tz")],
+            [InlineKeyboardButton(text=texts.GROUP_SETTINGS_PICK_DAY, callback_data="gs:day")],
+            [InlineKeyboardButton(text=texts.GROUP_SETTINGS_PICK_HOUR, callback_data="gs:hour")],
+        ]
+    )
+
+
+def _digest_day_kb() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=_WEEKDAYS_RU[i].capitalize(), callback_data=f"gs_day:{i}")]
+        for i in range(7)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _digest_hour_kb() -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for start in range(0, 24, 6):
+        rows.append(
+            [
+                InlineKeyboardButton(text=f"{h:02d}", callback_data=f"gs_hour:{h}")
+                for h in range(start, start + 6)
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.message(Command("group_settings"))
+async def cmd_group_settings(message: Message) -> None:
+    if message.from_user is None:
+        return
+    tg_id, username, full_name = _user_meta(message.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None:
+            await message.answer(texts.NO_ACTIVE_GROUP)
+            return
+        if not await is_creator(session, user.id, group.id):
+            await message.answer(texts.CREATOR_ONLY)
+            return
+        snapshot = (group.name, group.timezone, group.digest_day, group.digest_hour)
+
+    name, tz, day, hour = snapshot
+    await message.answer(
+        texts.GROUP_SETTINGS_HEADER.format(
+            group=name, tz=tz, weekday=_WEEKDAYS_RU[day], hour=hour
+        ),
+        reply_markup=_group_settings_kb(),
+    )
+
+
+@router.callback_query(F.data == "gs:tz")
+async def cb_gs_tz(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None:
+        await callback.answer()
+        return
+    tg_id, username, full_name = _user_meta(callback.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None or not await is_creator(session, user.id, group.id):
+            await callback.answer(texts.CREATOR_ONLY, show_alert=True)
+            return
+        await state.update_data(group_id=group.id)
+    await state.set_state(GroupSettings.waiting_tz)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(texts.GROUP_SETTINGS_TZ_PROMPT)
+    await callback.answer()
+
+
+@router.message(GroupSettings.waiting_tz, F.text)
+async def gs_tz_input(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    try:
+        ZoneInfo(raw)
+    except (ZoneInfoNotFoundError, ValueError):
+        await message.answer(texts.GROUP_SETTINGS_TZ_INVALID)
+        return
+    data = await state.get_data()
+    group_id = data["group_id"]
+    async with SessionLocal() as session, session.begin():
+        from bot.db.models import Group as _G
+        g = await session.get(_G, group_id)
+        if g is not None:
+            g.timezone = raw
+    await state.clear()
+    await message.answer(texts.GROUP_SETTINGS_TZ_OK.format(tz=raw))
+
+
+@router.callback_query(F.data == "gs:day")
+async def cb_gs_day(callback: CallbackQuery) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            texts.GROUP_SETTINGS_DAY_PROMPT, reply_markup=_digest_day_kb()
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^gs_day:[0-6]$"))
+async def cb_gs_day_pick(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None:
+        await callback.answer()
+        return
+    day = int(callback.data.split(":", 1)[1])
+    tg_id, username, full_name = _user_meta(callback.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None or not await is_creator(session, user.id, group.id):
+            await callback.answer(texts.CREATOR_ONLY, show_alert=True)
+            return
+        group.digest_day = day
+
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            texts.GROUP_SETTINGS_DAY_OK.format(weekday=_WEEKDAYS_RU[day])
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "gs:hour")
+async def cb_gs_hour(callback: CallbackQuery) -> None:
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            texts.GROUP_SETTINGS_HOUR_PROMPT, reply_markup=_digest_hour_kb()
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.regexp(r"^gs_hour:\d{1,2}$"))
+async def cb_gs_hour_pick(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None:
+        await callback.answer()
+        return
+    hour = int(callback.data.split(":", 1)[1])
+    if not 0 <= hour <= 23:
+        await callback.answer()
+        return
+    tg_id, username, full_name = _user_meta(callback.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None or not await is_creator(session, user.id, group.id):
+            await callback.answer(texts.CREATOR_ONLY, show_alert=True)
+            return
+        group.digest_hour = hour
+
+    if isinstance(callback.message, Message):
+        await callback.message.answer(texts.GROUP_SETTINGS_HOUR_OK.format(hour=hour))
+    await callback.answer()
+
+
+@router.message(Command("regenerate_code"))
+async def cmd_regenerate_code(message: Message) -> None:
+    if message.from_user is None:
+        return
+    tg_id, username, full_name = _user_meta(message.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None:
+            await message.answer(texts.NO_ACTIVE_GROUP)
+            return
+        if not await is_creator(session, user.id, group.id):
+            await message.answer(texts.CREATOR_ONLY)
+            return
+        new_code = await regenerate_invite_code(session, group)
+
+    await message.answer(texts.REGENERATE_CODE_OK.format(code=new_code))
+
+
+# ============ /leave ============
+
+
+@router.message(Command("leave"))
+async def cmd_leave(message: Message) -> None:
+    if message.from_user is None:
+        return
+    tg_id, username, full_name = _user_meta(message.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None:
+            await message.answer(texts.LEAVE_NO_GROUP)
+            return
+        group_name = group.name
+        status = await leave_group(session, group_id=group.id, user_id=user.id)
+        if status in ("left", "group_deleted"):
+            user.active_group_id = None
+
+    if status == "need_transfer":
+        await message.answer(texts.LEAVE_NEED_TRANSFER)
+    elif status == "not_member":
+        await message.answer(texts.LEAVE_NO_GROUP)
+    elif status == "group_deleted":
+        await message.answer(texts.LEAVE_DELETED.format(group=group_name))
+    else:
+        await message.answer(texts.LEAVE_OK.format(group=group_name))
