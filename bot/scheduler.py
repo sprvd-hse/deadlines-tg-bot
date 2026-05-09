@@ -1,13 +1,15 @@
 import contextlib
 import logging
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
-from bot.db.models import Assignment, ReminderType
+from bot.db.models import Assignment, Group, ReminderType
 from bot.db.session import SessionLocal
+from bot.services.digest import build_digest_messages, list_groups, list_recipients
 from bot.services.reminders import (
     RECOVERY_MIN_LEAD,
     offsets_for,
@@ -126,10 +128,70 @@ async def bootstrap_from_db() -> None:
                 )
 
 
+# (group_id, "YYYY-WW-D-H") — дедуп еженедельного дайджеста в рамках процесса.
+_sent_digests: set[tuple[int, str]] = set()
+
+
+async def _digest_tick() -> None:
+    if _bot is None:
+        return
+    now_utc = datetime.now(tz=UTC)
+    async with SessionLocal() as session:
+        groups = await list_groups(session)
+
+    for group in groups:
+        try:
+            local = now_utc.astimezone(ZoneInfo(group.timezone))
+        except Exception:
+            logger.exception("Невалидная TZ у группы %s", group.id)
+            continue
+        if local.weekday() != group.digest_day or local.hour != group.digest_hour:
+            continue
+        key = (group.id, local.strftime("%G-%V-%u-%H"))
+        if key in _sent_digests:
+            continue
+        _sent_digests.add(key)
+        try:
+            await _send_digest_for_group(group_id=group.id)
+        except Exception:
+            logger.exception("Ошибка дайджеста группы %s", group.id)
+
+
+async def _send_digest_for_group(*, group_id: int) -> None:
+    if _bot is None:
+        return
+    async with SessionLocal() as session:
+        group = await session.get(Group, group_id)
+        if group is None:
+            return
+        messages = await build_digest_messages(session, group)
+        chat_id = group.chat_id
+        recipients = [] if chat_id else await list_recipients(session, group_id)
+
+    if not messages:
+        return
+    if chat_id is not None:
+        for text in messages:
+            with contextlib.suppress(Exception):
+                await _bot.send_message(chat_id, text)
+        return
+    for user in recipients:
+        for text in messages:
+            with contextlib.suppress(Exception):
+                await _bot.send_message(user.tg_user_id, text)
+
+
 async def start_scheduler(bot: Bot) -> AsyncIOScheduler:
     global _scheduler, _bot
     _bot = bot
     _scheduler = AsyncIOScheduler(timezone=UTC)
+    _scheduler.add_job(
+        _digest_tick,
+        trigger="cron",
+        minute=0,
+        id="digest_tick",
+        replace_existing=True,
+    )
     _scheduler.start()
     await bootstrap_from_db()
     return _scheduler

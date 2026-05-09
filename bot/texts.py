@@ -27,6 +27,8 @@ HELP = (
     "Только для creator группы:\n"
     "/transfer_ownership — передать роль создателя\n"
     "/delete_group — удалить группу\n"
+    "/bind_chat — привязать групповой чат для дайджестов (в чате)\n"
+    "/unbind_chat — отвязать чат\n"
     "\n"
     "/help — эта справка"
 )
@@ -152,3 +154,19 @@ DELETE_GROUP_CONFIRM_1 = (
 DELETE_GROUP_CONFIRM_2 = "Точно удалить «{name}»? Это последний шанс отменить."
 DELETE_GROUP_OK = "Группа «{name}» удалена."
 DELETE_GROUP_CANCELLED = "Удаление отменено."
+
+BIND_CHAT_NOT_GROUP = "Команда /bind_chat должна быть выполнена в групповом чате."
+BIND_CHAT_NO_ACTIVE_GROUP = (
+    "Не нашёл твоих групп. Сделай нужную группу активной (/my_groups) и повтори в чате."
+)
+BIND_CHAT_NOT_CREATOR = "Привязать чат может только создатель группы."
+BIND_CHAT_BOT_CANT_WRITE = "У бота нет прав отправлять сообщения в этом чате."
+BIND_CHAT_OK = "Чат «{chat}» привязан к группе «{group}»."
+BIND_CHAT_REPLACE_CONFIRM = (
+    "К группе «{group}» уже привязан другой чат. Заменить на текущий?"
+)
+BIND_CHAT_REPLACED = "Привязка чата заменена."
+BIND_CHAT_CANCELLED = "Привязка отменена."
+
+UNBIND_CHAT_NONE = "У группы нет привязанного чата."
+UNBIND_CHAT_OK = "Чат отвязан от группы «{group}»."

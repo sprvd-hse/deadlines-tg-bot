@@ -359,3 +359,118 @@ async def cb_delete_group_step2(callback: CallbackQuery) -> None:
     if isinstance(callback.message, Message):
         await callback.message.answer(texts.DELETE_GROUP_OK.format(name=group_name))
     await callback.answer()
+
+
+# ============ /bind_chat, /unbind_chat ============
+
+
+async def _bot_can_send_in(bot, chat_id: int) -> bool:
+    try:
+        me = await bot.get_me()
+        member = await bot.get_chat_member(chat_id, me.id)
+    except Exception:
+        return False
+    status = getattr(member, "status", "")
+    if status in ("administrator", "creator"):
+        return True
+    if status == "member":
+        return getattr(member, "can_send_messages", True) is not False
+    return False
+
+
+@router.message(Command("bind_chat"))
+async def cmd_bind_chat(message: Message) -> None:
+    if message.from_user is None:
+        return
+    if message.chat.type not in ("group", "supergroup"):
+        await message.answer(texts.BIND_CHAT_NOT_GROUP)
+        return
+
+    tg_id, username, full_name = _user_meta(message.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None:
+            await message.answer(texts.BIND_CHAT_NO_ACTIVE_GROUP)
+            return
+        if not await is_creator(session, user.id, group.id):
+            await message.answer(texts.BIND_CHAT_NOT_CREATOR)
+            return
+        existing_chat_id = group.chat_id
+        group_id, group_name = group.id, group.name
+
+    if not await _bot_can_send_in(message.bot, message.chat.id):
+        await message.answer(texts.BIND_CHAT_BOT_CANT_WRITE)
+        return
+
+    if existing_chat_id is not None and existing_chat_id != message.chat.id:
+        await message.answer(
+            texts.BIND_CHAT_REPLACE_CONFIRM.format(group=group_name),
+            reply_markup=yes_no_kb(prefix=f"bindchat:{group_id}:{message.chat.id}"),
+        )
+        return
+
+    async with SessionLocal() as session, session.begin():
+        from bot.db.models import Group as _G
+        g = await session.get(_G, group_id)
+        if g is not None:
+            g.chat_id = message.chat.id
+
+    chat_title = message.chat.title or str(message.chat.id)
+    await message.answer(texts.BIND_CHAT_OK.format(chat=chat_title, group=group_name))
+
+
+@router.callback_query(F.data.regexp(r"^bindchat:\d+:-?\d+:(yes|no)$"))
+async def cb_bind_chat_confirm(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None:
+        await callback.answer()
+        return
+    _, gid_str, chat_str, decision = callback.data.split(":")
+    group_id = int(gid_str)
+    chat_id = int(chat_str)
+
+    if decision == "no":
+        if isinstance(callback.message, Message):
+            await callback.message.answer(texts.BIND_CHAT_CANCELLED)
+        await callback.answer()
+        return
+
+    tg_id, username, full_name = _user_meta(callback.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        if not await is_creator(session, user.id, group_id):
+            await callback.answer(texts.BIND_CHAT_NOT_CREATOR, show_alert=True)
+            return
+        from bot.db.models import Group as _G
+        g = await session.get(_G, group_id)
+        if g is not None:
+            g.chat_id = chat_id
+
+    if isinstance(callback.message, Message):
+        await callback.message.answer(texts.BIND_CHAT_REPLACED)
+    await callback.answer()
+
+
+@router.message(Command("unbind_chat"))
+async def cmd_unbind_chat(message: Message) -> None:
+    if message.from_user is None:
+        return
+    if message.chat.type != "private":
+        return
+    tg_id, username, full_name = _user_meta(message.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None:
+            await message.answer(texts.NO_ACTIVE_GROUP)
+            return
+        if not await is_creator(session, user.id, group.id):
+            await message.answer(texts.CREATOR_ONLY)
+            return
+        if group.chat_id is None:
+            await message.answer(texts.UNBIND_CHAT_NONE)
+            return
+        group.chat_id = None
+        group_name = group.name
+
+    await message.answer(texts.UNBIND_CHAT_OK.format(group=group_name))
