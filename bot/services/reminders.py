@@ -137,7 +137,7 @@ async def fetch_context(
 
 
 async def send_reminder_batch(
-    session: AsyncSession,
+    session_factory,
     bot,
     *,
     assignment_id: int,
@@ -146,48 +146,61 @@ async def send_reminder_batch(
 ) -> int:
     """Отправляет личные напоминания всем подходящим участникам, пишет ReminderLog.
 
-    Возвращает количество отправленных сообщений. Идемпотентно: повторный вызов
-    не дублирует отправки благодаря ReminderLog.
+    Идемпотентно: на каждого получателя своя транзакция, ReminderLog коммитится
+    сразу после успешной отправки, поэтому при сбое в середине батча не будет
+    дублей при ретрае. `session_factory` — async_sessionmaker (например, SessionLocal).
     """
     now = now_utc or datetime.now(tz=UTC)
-    ctx = await fetch_context(session, assignment_id)
-    if ctx is None:
-        return 0
-    assignment, group, subject_name = ctx
-    if assignment.deadline <= now:
-        return 0
 
-    already = await already_logged_user_ids(
-        session, assignment_id=assignment_id, reminder_type=reminder_type
-    )
-    recipients = await recipients_for(session, assignment)
-    text = build_reminder_text(
-        group_name=group.name,
-        group_tz=group.timezone,
-        assignment=assignment,
-        subject_name=subject_name,
-        reminder_type=reminder_type,
-    )
+    # Подготовка: один read-снимок контекста, получателей и уже разосланных.
+    async with session_factory() as session:
+        ctx = await fetch_context(session, assignment_id)
+        if ctx is None:
+            return 0
+        assignment, group, subject_name = ctx
+        if assignment.deadline <= now:
+            return 0
+        already = await already_logged_user_ids(
+            session, assignment_id=assignment_id, reminder_type=reminder_type
+        )
+        recipients = await recipients_for(session, assignment)
+        text = build_reminder_text(
+            group_name=group.name,
+            group_tz=group.timezone,
+            assignment=assignment,
+            subject_name=subject_name,
+            reminder_type=reminder_type,
+        )
+        recipient_pairs = [(u.id, u.tg_user_id) for u in recipients if u.id not in already]
 
     sent = 0
-    for user in recipients:
-        if user.id in already:
-            continue
+    for user_id, tg_user_id in recipient_pairs:
         try:
-            await bot.send_message(user.tg_user_id, text)
+            await bot.send_message(tg_user_id, text)
         except Exception:
             logger.exception(
                 "Не удалось отправить напоминание user=%s assignment=%s",
-                user.id,
+                user_id,
                 assignment_id,
             )
             continue
-        session.add(
-            ReminderLog(
-                assignment_id=assignment_id,
-                user_id=user.id,
-                reminder_type=reminder_type,
+        # Коммитим лог сразу после успешной отправки — это даёт идемпотентность
+        # при падениях между отправками.
+        try:
+            async with session_factory() as log_session, log_session.begin():
+                log_session.add(
+                    ReminderLog(
+                        assignment_id=assignment_id,
+                        user_id=user_id,
+                        reminder_type=reminder_type,
+                    )
+                )
+        except Exception:
+            logger.exception(
+                "Не удалось записать ReminderLog user=%s assignment=%s",
+                user_id,
+                assignment_id,
             )
-        )
+            continue
         sent += 1
     return sent

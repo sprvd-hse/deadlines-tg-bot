@@ -36,13 +36,12 @@ async def _fire_reminder(assignment_id: int, reminder_type_value: str) -> None:
     if _bot is None:
         return
     reminder_type = ReminderType(reminder_type_value)
-    async with SessionLocal() as session, session.begin():
-        await send_reminder_batch(
-            session,
-            _bot,
-            assignment_id=assignment_id,
-            reminder_type=reminder_type,
-        )
+    await send_reminder_batch(
+        SessionLocal,
+        _bot,
+        assignment_id=assignment_id,
+        reminder_type=reminder_type,
+    )
 
 
 def schedule_assignment_reminders(assignment: Assignment, *, now_utc: datetime | None = None) -> None:
@@ -118,18 +117,20 @@ async def bootstrap_from_db() -> None:
             # Recovery: время напоминания прошло. Шлём сейчас, если до дедлайна ≥ 30 минут.
             if a.deadline - now < RECOVERY_MIN_LEAD:
                 continue
-            async with SessionLocal() as session, session.begin():
-                await send_reminder_batch(
-                    session,
-                    _bot,
-                    assignment_id=a.id,
-                    reminder_type=rtype,
-                    now_utc=now,
-                )
+            await send_reminder_batch(
+                SessionLocal,
+                _bot,
+                assignment_id=a.id,
+                reminder_type=rtype,
+                now_utc=now,
+            )
 
 
-# (group_id, "YYYY-WW-D-H") — дедуп еженедельного дайджеста в рамках процесса.
-_sent_digests: set[tuple[int, str]] = set()
+def _current_slot_start_utc(group: Group, now_utc: datetime) -> datetime:
+    """UTC-таймстамп начала текущего часового слота дайджеста (минута=0 в TZ группы)."""
+    local = now_utc.astimezone(ZoneInfo(group.timezone))
+    slot_local = local.replace(minute=0, second=0, microsecond=0)
+    return slot_local.astimezone(UTC)
 
 
 async def _digest_tick() -> None:
@@ -147,38 +148,49 @@ async def _digest_tick() -> None:
             continue
         if local.weekday() != group.digest_day or local.hour != group.digest_hour:
             continue
-        key = (group.id, local.strftime("%G-%V-%u-%H"))
-        if key in _sent_digests:
+        slot_start = _current_slot_start_utc(group, now_utc)
+        last_sent = group.digest_last_sent_at
+        if last_sent is not None and last_sent.tzinfo is None:
+            last_sent = last_sent.replace(tzinfo=UTC)
+        if last_sent is not None and last_sent >= slot_start:
             continue
-        _sent_digests.add(key)
         try:
-            await _send_digest_for_group(group_id=group.id)
+            sent = await _send_digest_for_group(group_id=group.id)
         except Exception:
             logger.exception("Ошибка дайджеста группы %s", group.id)
+            continue
+        if not sent:
+            continue
+        # Помечаем слот как отправленный — идемпотентность поверх рестартов.
+        async with SessionLocal() as session, session.begin():
+            g = await session.get(Group, group.id)
+            if g is not None:
+                g.digest_last_sent_at = now_utc
 
 
-async def _send_digest_for_group(*, group_id: int) -> None:
+async def _send_digest_for_group(*, group_id: int) -> bool:
     if _bot is None:
-        return
+        return False
     async with SessionLocal() as session:
         group = await session.get(Group, group_id)
         if group is None:
-            return
+            return False
         messages = await build_digest_messages(session, group)
         chat_id = group.chat_id
         recipients = [] if chat_id else await list_recipients(session, group_id)
 
     if not messages:
-        return
+        return False
     if chat_id is not None:
         for text in messages:
             with contextlib.suppress(Exception):
                 await _bot.send_message(chat_id, text)
-        return
+        return True
     for user in recipients:
         for text in messages:
             with contextlib.suppress(Exception):
                 await _bot.send_message(user.tg_user_id, text)
+    return True
 
 
 async def start_scheduler(bot: Bot) -> AsyncIOScheduler:

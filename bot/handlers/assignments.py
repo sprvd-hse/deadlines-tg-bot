@@ -4,6 +4,7 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy.exc import IntegrityError
 
 from bot import texts
 from bot.db.models import Assignment, AssignmentType
@@ -200,25 +201,39 @@ async def add_confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
     atype = AssignmentType(data["type"])
 
     tg_user = callback.from_user
-    async with SessionLocal() as session, session.begin():
-        user = await get_or_create_user(
-            session,
-            tg_user.id,
-            tg_user.username,
-            tg_user.full_name or tg_user.username or "user",
-        )
-        assignment = await assn_svc.create_assignment(
-            session,
-            group_id=data["group_id"],
-            creator_user_id=user.id,
-            subject_id=data["subject_id"],
-            assignment_type=atype,
-            title=data["title"],
-            description=data.get("description"),
-            links=data.get("links", []),
-            deadline_utc=deadline_utc,
-        )
-        short_id, title = assignment.short_id, assignment.title
+    assignment = None
+    last_err: IntegrityError | None = None
+    # Ретрай на конфликт UNIQUE(group_id, short_id) при параллельных /add.
+    for _ in range(5):
+        try:
+            async with SessionLocal() as session, session.begin():
+                user = await get_or_create_user(
+                    session,
+                    tg_user.id,
+                    tg_user.username,
+                    tg_user.full_name or tg_user.username or "user",
+                )
+                assignment = await assn_svc.create_assignment(
+                    session,
+                    group_id=data["group_id"],
+                    creator_user_id=user.id,
+                    subject_id=data["subject_id"],
+                    assignment_type=atype,
+                    title=data["title"],
+                    description=data.get("description"),
+                    links=data.get("links", []),
+                    deadline_utc=deadline_utc,
+                )
+            break
+        except IntegrityError as e:
+            last_err = e
+            assignment = None
+            continue
+    if assignment is None:
+        if last_err is not None:
+            raise last_err
+        return
+    short_id, title = assignment.short_id, assignment.title
 
     schedule_assignment_reminders(assignment)
 

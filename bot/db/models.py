@@ -51,6 +51,9 @@ class Group(Base):
     digest_day: Mapped[int] = mapped_column(Integer, nullable=False, default=6)
     digest_hour: Mapped[int] = mapped_column(Integer, nullable=False, default=19)
     chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    digest_last_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_by_user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

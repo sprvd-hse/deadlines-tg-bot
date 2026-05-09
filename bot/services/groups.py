@@ -4,7 +4,16 @@ from typing import Literal
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.db.models import Group, GroupMember, MemberRole, User
+from bot.db.models import (
+    Assignment,
+    AssignmentCompletion,
+    Group,
+    GroupMember,
+    MemberRole,
+    ReminderLog,
+    Subject,
+    User,
+)
 from bot.utils import generate_invite_code
 
 JoinStatus = Literal["ok", "not_found", "already_member"]
@@ -224,7 +233,7 @@ async def leave_group(
     if member.role == MemberRole.creator and len(members_count) > 1:
         return "need_transfer"
     if len(members_count) == 1:
-        await session.execute(delete(Group).where(Group.id == group_id))
+        await delete_group(session, group_id)
         return "group_deleted"
     await session.execute(
         delete(GroupMember).where(
@@ -235,7 +244,37 @@ async def leave_group(
 
 
 async def delete_group(session: AsyncSession, group_id: int) -> None:
-    """Удаляет группу. FK-каскады удалят members, subjects, assignments, completions, reminders."""
+    """Удаляет группу. Порядок: reminder_log → completions → assignments → subjects → members → group.
+
+    Явный порядок нужен потому, что Assignment.subject_id имеет ondelete=RESTRICT
+    и каскад с groups может попытаться удалить subject раньше assignment.
+    Также сбрасываем active_group_id у пользователей, чтобы FK SET NULL отработал
+    предсказуемо при последующем DELETE Group.
+    """
+    assignment_ids = list(
+        (
+            await session.execute(
+                select(Assignment.id).where(Assignment.group_id == group_id)
+            )
+        ).scalars()
+    )
+    if assignment_ids:
+        await session.execute(
+            delete(ReminderLog).where(ReminderLog.assignment_id.in_(assignment_ids))
+        )
+        await session.execute(
+            delete(AssignmentCompletion).where(
+                AssignmentCompletion.assignment_id.in_(assignment_ids)
+            )
+        )
+    await session.execute(delete(Assignment).where(Assignment.group_id == group_id))
+    await session.execute(delete(Subject).where(Subject.group_id == group_id))
+    await session.execute(delete(GroupMember).where(GroupMember.group_id == group_id))
+    await session.execute(
+        User.__table__.update()
+        .where(User.active_group_id == group_id)
+        .values(active_group_id=None)
+    )
     await session.execute(delete(Group).where(Group.id == group_id))
 
 
