@@ -1,0 +1,30 @@
+services:
+  migrate:
+    build: .
+    image: group-deadlines-bot:latest
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    volumes:
+      - bot_data:/data
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////data/bot.db}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Vilnius}
+
+  bot:
+    image: group-deadlines-bot:latest
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    volumes:
+      - bot_data:/data
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////data/bot.db}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DEFAULT_TIMEZONE: ${DEFAULT_TIMEZONE:-Europe/Vilnius}
+
+volumes:
+  bot_data:
