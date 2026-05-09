@@ -44,10 +44,6 @@ async def _load_tasks(
     return active, passed, subj_by_id
 
 
-def _short_button_label(a: Assignment, subj_by_id: dict[int, str]) -> str:
-    return f"#{a.short_id} {a.title} ({subj_by_id.get(a.subject_id, '?')})"
-
-
 @router.callback_query(F.data == "m:tasks")
 async def cb_tasks(callback: CallbackQuery) -> None:
     await _render_tasks(callback)
@@ -59,28 +55,32 @@ async def open_tasks_page(target: CallbackQuery | Message, *, page: int = 0) -> 
     await _render_tasks(target)
 
 
-def _group_by_subject(
-    items: list[Assignment],
-) -> list[tuple[int, list[Assignment]]]:
-    """Группирует задания по subject_id.
-    Сначала subject'ы с ближайшим (минимальным) дедлайном; subject'ы где все
-    дедлайны None — в конце. Внутри subject'а — по дедлайну asc, None — в конце.
-    """
-    by_subject: dict[int, list[Assignment]] = {}
-    for a in items:
-        by_subject.setdefault(a.subject_id, []).append(a)
+_MD2_SPECIAL = r"_*[]()~`>#+-=|{}.!\\"
 
-    INF = datetime.max.replace(tzinfo=UTC)
 
-    def _key(a: Assignment) -> datetime:
-        return ensure_utc(a.deadline) if a.deadline is not None else INF
+def _md2(s: str) -> str:
+    return "".join("\\" + c if c in _MD2_SPECIAL else c for c in s)
 
-    sorted_subjects: list[tuple[int, list[Assignment]]] = []
-    for sid, lst in by_subject.items():
-        lst.sort(key=_key)
-        sorted_subjects.append((sid, lst))
-    sorted_subjects.sort(key=lambda kv: _key(kv[1][0]))
-    return sorted_subjects
+
+def _short_deadline(a: Assignment, tz_name: str) -> str:
+    if a.deadline is None:
+        return "до конца модуля"
+    from zoneinfo import ZoneInfo
+    local = ensure_utc(a.deadline).astimezone(ZoneInfo(tz_name))
+    return f"{local.day:02d}.{local.month:02d} {local.hour:02d}:{local.minute:02d}"
+
+
+async def _send_md2(target: CallbackQuery | Message, text: str, kb) -> None:
+    if isinstance(target, CallbackQuery):
+        msg = target.message
+        if isinstance(msg, Message):
+            try:
+                await msg.edit_text(text, reply_markup=kb, parse_mode="MarkdownV2")
+            except Exception:
+                await msg.answer(text, reply_markup=kb, parse_mode="MarkdownV2")
+        await target.answer()
+        return
+    await target.answer(text, reply_markup=kb, parse_mode="MarkdownV2")
 
 
 async def _render_tasks(callback: CallbackQuery | Message) -> None:
@@ -95,54 +95,71 @@ async def _render_tasks(callback: CallbackQuery | Message) -> None:
         await render(callback, texts.LIST_EMPTY, back_home_kb())
         return
 
-    text_lines: list[str] = ["📋 Задания"]
+    INF = datetime.max.replace(tzinfo=UTC)
+
+    def _akey(a: Assignment) -> datetime:
+        return ensure_utc(a.deadline) if a.deadline is not None else INF
+
+    # Группируем active и passed по subject_id.
+    by_subject_active: dict[int, list[Assignment]] = {}
+    for a in active:
+        by_subject_active.setdefault(a.subject_id, []).append(a)
+    for lst in by_subject_active.values():
+        lst.sort(key=_akey)
+
+    by_subject_passed: dict[int, list[Assignment]] = {}
+    for a in passed:
+        by_subject_passed.setdefault(a.subject_id, []).append(a)
+    for lst in by_subject_passed.values():
+        lst.sort(key=lambda a: ensure_utc(a.deadline), reverse=True)
+
+    subject_ids = sorted(
+        set(by_subject_active.keys()) | set(by_subject_passed.keys()),
+        key=lambda sid: (
+            _akey(by_subject_active[sid][0]) if sid in by_subject_active else INF,
+            subj_by_id.get(sid, ""),
+        ),
+    )
+
+    text_lines: list[str] = ["📋 *Задания*"]
     rows: list[list[InlineKeyboardButton]] = []
 
-    # Сначала плоский список всех активных по дедлайну (asc, NULL в конце).
-    if active:
-        INF = datetime.max.replace(tzinfo=UTC)
-        flat_active = sorted(
-            active,
-            key=lambda a: ensure_utc(a.deadline) if a.deadline is not None else INF,
-        )
-        text_lines.append("\nВсе открытые:")
-        for a in flat_active:
+    for sid in subject_ids:
+        name = subj_by_id.get(sid, "?")
+        text_lines.append("")
+        text_lines.append(f"*{_md2(name)}*")
+
+        actives = by_subject_active.get(sid, [])
+        passeds = by_subject_passed.get(sid, [])
+
+        for i, a in enumerate(actives, 1):
+            dl = _short_deadline(a, tz_name)
+            text_lines.append(f"{i}\\. {_md2(a.title)} — {_md2(dl)}")
             rows.append(
                 [
                     InlineKeyboardButton(
-                        text=_short_button_label(a, subj_by_id),
+                        text=f"{i}. {a.title}",
                         callback_data=f"m:task:{a.id}",
                     )
                 ]
             )
 
-        # Ниже — текстовая сводка по предметам.
-        text_lines.append("\n📚 По предметам:")
-        for sid, lst in _group_by_subject(active):
-            name = subj_by_id.get(sid, "?")
-            datetimed = [a for a in lst if a.deadline is not None]
-            no_date = len(lst) - len(datetimed)
-            extra = ""
-            if datetimed:
-                nearest = format_deadline_display(datetimed[0].deadline, tz_name)
-                extra = f", ближайший {nearest}"
-            no_date_str = f", без даты: {no_date}" if no_date else ""
-            text_lines.append(f"• {name} — {len(lst)}{extra}{no_date_str}")
-
-    if passed:
-        text_lines.append(f"\n{texts.LIST_PASSED_HEADER}")
-        for a in passed:
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text=_short_button_label(a, subj_by_id),
-                        callback_data=f"m:task:{a.id}",
-                    )
-                ]
-            )
+        if passeds:
+            text_lines.append("_Прошедшие:_")
+            for i, a in enumerate(passeds, 1):
+                dl = _short_deadline(a, tz_name)
+                text_lines.append(f"{i}\\. {_md2(a.title)} — {_md2(dl)}")
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=f"П{i}. {a.title}",
+                            callback_data=f"m:task:{a.id}",
+                        )
+                    ]
+                )
 
     rows.append([InlineKeyboardButton(text=texts.DIGEST_BTN, callback_data="m:tasks:digest")])
-    await render(callback, "\n".join(text_lines), with_back_home(rows))
+    await _send_md2(callback, "\n".join(text_lines), with_back_home(rows))
 
 
 @router.callback_query(F.data == "m:tasks:digest")
