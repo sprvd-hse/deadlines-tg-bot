@@ -18,12 +18,29 @@ ASSIGNMENT_TYPE_LABELS: dict[AssignmentType, str] = {
 }
 
 
+def _reminder_hint(atype: AssignmentType) -> str:
+    # Локальный импорт — чтобы избежать циклической зависимости
+    # (reminders импортирует ASSIGNMENT_TYPE_LABELS из этого модуля).
+    from src.services.reminders import OFFSETS_BY_TYPE
+
+    offsets = OFFSETS_BY_TYPE.get(atype, [])
+    if not offsets:
+        return ""
+    days = "/".join(str(int(off.days)) for _rt, off in offsets)
+    return f"напомню за {days} дн."
+
+
 def assignment_type_kb(prefix: str = "assign_type", keep_label: str | None = None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if keep_label is not None:
         rows.append([InlineKeyboardButton(text=f"⤴ Оставить ({keep_label})", callback_data=f"{prefix}:keep")])
     rows.extend(
-        [InlineKeyboardButton(text=label, callback_data=f"{prefix}:{atype.value}")]
+        [
+            InlineKeyboardButton(
+                text=f"{label} · {_reminder_hint(atype)}",
+                callback_data=f"{prefix}:{atype.value}",
+            )
+        ]
         for atype, label in ASSIGNMENT_TYPE_LABELS.items()
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
