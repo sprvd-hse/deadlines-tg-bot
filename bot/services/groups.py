@@ -1,13 +1,14 @@
 import time
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db.models import Group, GroupMember, MemberRole, User
 from bot.utils import generate_invite_code
 
 JoinStatus = Literal["ok", "not_found", "already_member"]
+TransferStatus = Literal["ok", "not_member", "same_user"]
 
 _INVITE_GENERATION_RETRIES = 5
 
@@ -133,6 +134,55 @@ async def is_creator(session: AsyncSession, user_id: int, group_id: int) -> bool
         )
     ).scalar_one_or_none()
     return role == MemberRole.creator
+
+
+async def list_members(
+    session: AsyncSession, group_id: int
+) -> list[tuple[User, MemberRole]]:
+    """Список (user, role) для группы, отсортированный creator-сначала, потом по имени."""
+    rows = (
+        await session.execute(
+            select(User, GroupMember.role)
+            .join(GroupMember, GroupMember.user_id == User.id)
+            .where(GroupMember.group_id == group_id)
+            .order_by(GroupMember.role, User.full_name)
+        )
+    ).all()
+    return [(u, role) for u, role in rows]
+
+
+async def transfer_ownership(
+    session: AsyncSession, *, group_id: int, current_creator_id: int, new_creator_user_id: int
+) -> TransferStatus:
+    if current_creator_id == new_creator_user_id:
+        return "same_user"
+    new_member = (
+        await session.execute(
+            select(GroupMember).where(
+                GroupMember.group_id == group_id,
+                GroupMember.user_id == new_creator_user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if new_member is None:
+        return "not_member"
+    current_member = (
+        await session.execute(
+            select(GroupMember).where(
+                GroupMember.group_id == group_id,
+                GroupMember.user_id == current_creator_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if current_member is not None:
+        current_member.role = MemberRole.member
+    new_member.role = MemberRole.creator
+    return "ok"
+
+
+async def delete_group(session: AsyncSession, group_id: int) -> None:
+    """Удаляет группу. FK-каскады удалят members, subjects, assignments, completions, reminders."""
+    await session.execute(delete(Group).where(Group.id == group_id))
 
 
 async def _generate_unique_invite_code(session: AsyncSession) -> str:

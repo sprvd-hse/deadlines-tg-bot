@@ -1,12 +1,14 @@
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.db.models import Assignment, AssignmentCompletion, AssignmentType
+from bot.db.models import Assignment, AssignmentCompletion, AssignmentType, ReminderLog
 
 DeleteStatus = Literal["ok", "not_found", "forbidden", "already_deleted"]
+CompleteStatus = Literal["ok", "already", "not_found"]
+UncompleteStatus = Literal["ok", "not_marked", "not_found"]
 
 PASSED_DAYS_BACK = 14
 
@@ -134,3 +136,66 @@ async def completed_ids_for_user(
         )
     ).scalars()
     return set(rows)
+
+
+async def mark_completed(
+    session: AsyncSession, *, group_id: int, short_id: int, user_id: int
+) -> CompleteStatus:
+    a = await get_by_short_id(session, group_id, short_id)
+    if a is None or not a.is_active:
+        return "not_found"
+    existing = (
+        await session.execute(
+            select(AssignmentCompletion.id).where(
+                AssignmentCompletion.assignment_id == a.id,
+                AssignmentCompletion.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return "already"
+    session.add(AssignmentCompletion(assignment_id=a.id, user_id=user_id))
+    return "ok"
+
+
+async def unmark_completed(
+    session: AsyncSession, *, group_id: int, short_id: int, user_id: int
+) -> UncompleteStatus:
+    a = await get_by_short_id(session, group_id, short_id)
+    if a is None or not a.is_active:
+        return "not_found"
+    result = await session.execute(
+        delete(AssignmentCompletion).where(
+            AssignmentCompletion.assignment_id == a.id,
+            AssignmentCompletion.user_id == user_id,
+        )
+    )
+    return "ok" if result.rowcount else "not_marked"
+
+
+async def update_assignment(
+    session: AsyncSession,
+    assignment: Assignment,
+    *,
+    assignment_type: AssignmentType,
+    subject_id: int,
+    title: str,
+    description: str | None,
+    links: list[str],
+    deadline_utc: datetime,
+) -> bool:
+    """Обновляет поля задания. Возвращает True, если deadline изменился."""
+    deadline_changed = assignment.deadline != deadline_utc
+    assignment.type = assignment_type
+    assignment.subject_id = subject_id
+    assignment.title = title
+    assignment.description = description
+    assignment.links = links
+    assignment.deadline = deadline_utc
+    return deadline_changed
+
+
+async def clear_reminder_log(session: AsyncSession, assignment_id: int) -> None:
+    await session.execute(
+        delete(ReminderLog).where(ReminderLog.assignment_id == assignment_id)
+    )

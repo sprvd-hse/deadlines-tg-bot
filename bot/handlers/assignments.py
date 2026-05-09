@@ -19,7 +19,7 @@ from bot.services import subjects as subj_svc
 from bot.services.deadline_parser import DeadlineParseError, parse_deadline
 from bot.services.groups import get_active_group, is_creator
 from bot.services.users import get_or_create_user
-from bot.states import AddAssignment
+from bot.states import AddAssignment, EditAssignment
 from bot.utils import format_deadline_display, parse_links
 
 router = Router(name="assignments")
@@ -351,3 +351,308 @@ async def cmd_delete(message: Message, command: CommandObject) -> None:
         await message.answer(texts.DELETE_ALREADY.format(n=short_id))
     else:
         await message.answer(texts.DELETE_OK.format(n=short_id))
+
+
+# ============ /done, /undone ============
+
+
+def _parse_short_id(raw: str) -> int | None:
+    raw = raw.strip().lstrip("#")
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+@router.message(Command("done"))
+async def cmd_done(message: Message, command: CommandObject) -> None:
+    meta = _user_meta(message)
+    if meta is None:
+        return
+    short_id = _parse_short_id(command.args or "")
+    if short_id is None:
+        await message.answer(texts.USAGE_DONE)
+        return
+    tg_id, username, full_name = meta
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None:
+            await message.answer(texts.NO_ACTIVE_GROUP)
+            return
+        status = await assn_svc.mark_completed(
+            session, group_id=group.id, short_id=short_id, user_id=user.id
+        )
+
+    if status == "not_found":
+        await message.answer(texts.DONE_NOT_FOUND.format(n=short_id))
+    elif status == "already":
+        await message.answer(texts.DONE_ALREADY.format(n=short_id))
+    else:
+        await message.answer(texts.DONE_OK.format(n=short_id))
+
+
+@router.message(Command("undone"))
+async def cmd_undone(message: Message, command: CommandObject) -> None:
+    meta = _user_meta(message)
+    if meta is None:
+        return
+    short_id = _parse_short_id(command.args or "")
+    if short_id is None:
+        await message.answer(texts.USAGE_UNDONE)
+        return
+    tg_id, username, full_name = meta
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None:
+            await message.answer(texts.NO_ACTIVE_GROUP)
+            return
+        status = await assn_svc.unmark_completed(
+            session, group_id=group.id, short_id=short_id, user_id=user.id
+        )
+
+    if status == "not_found":
+        await message.answer(texts.DONE_NOT_FOUND.format(n=short_id))
+    elif status == "not_marked":
+        await message.answer(texts.UNDONE_NOT_MARKED.format(n=short_id))
+    else:
+        await message.answer(texts.UNDONE_OK.format(n=short_id))
+
+
+# ============ /edit FSM ============
+
+
+_CLEAR_TOKEN = "_"
+
+
+def _links_display(links: list[str]) -> str:
+    return ", ".join(links) if links else "—"
+
+
+@router.message(Command("edit"))
+async def cmd_edit(message: Message, command: CommandObject, state: FSMContext) -> None:
+    meta = _user_meta(message)
+    if meta is None:
+        return
+    short_id = _parse_short_id(command.args or "")
+    if short_id is None:
+        await message.answer(texts.USAGE_EDIT)
+        return
+    tg_id, username, full_name = meta
+
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        group = await get_active_group(session, user)
+        if group is None:
+            await message.answer(texts.NO_ACTIVE_GROUP)
+            return
+        a = await assn_svc.get_by_short_id(session, group.id, short_id)
+        if a is None or not a.is_active:
+            await message.answer(texts.DELETE_NOT_FOUND.format(n=short_id))
+            return
+        is_grp_creator = await is_creator(session, user.id, group.id)
+        if a.created_by_user_id != user.id and not is_grp_creator:
+            await message.answer(texts.EDIT_FORBIDDEN)
+            return
+        subjects = await subj_svc.list_subjects(session, group.id)
+        subj_by_id = {s.id: s.name for s in subjects}
+        await state.update_data(
+            assignment_id=a.id,
+            group_id=group.id,
+            group_tz=group.timezone,
+            short_id=a.short_id,
+            type=a.type.value,
+            subject_id=a.subject_id,
+            subject_name=subj_by_id.get(a.subject_id, "?"),
+            title=a.title,
+            description=a.description,
+            links=list(a.links or []),
+            deadline_iso=a.deadline.isoformat(),
+            orig_deadline_iso=a.deadline.isoformat(),
+        )
+
+    current_label = ASSIGNMENT_TYPE_LABELS[AssignmentType(a.type.value)]
+    await state.set_state(EditAssignment.waiting_type)
+    await message.answer(
+        texts.ADD_STEP_TYPE,
+        reply_markup=assignment_type_kb(prefix="edit_type", keep_label=current_label),
+    )
+
+
+@router.callback_query(EditAssignment.waiting_type, F.data.startswith("edit_type:"))
+async def edit_type(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None:
+        await callback.answer()
+        return
+    value = callback.data.split(":", 1)[1]
+    data = await state.get_data()
+    if value != "keep":
+        try:
+            atype = AssignmentType(value)
+        except ValueError:
+            await callback.answer()
+            return
+        await state.update_data(type=atype.value)
+
+    async with SessionLocal() as session:
+        subjects = await subj_svc.list_subjects(session, data["group_id"])
+    await state.set_state(EditAssignment.waiting_subject)
+    if isinstance(callback.message, Message):
+        await callback.message.answer(
+            texts.ADD_STEP_SUBJECT,
+            reply_markup=subjects_kb(subjects, prefix="edit_subj", keep_label=data["subject_name"]),
+        )
+    await callback.answer()
+
+
+@router.callback_query(EditAssignment.waiting_subject, F.data.startswith("edit_subj:"))
+async def edit_subject(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None:
+        await callback.answer()
+        return
+    value = callback.data.split(":", 1)[1]
+    data = await state.get_data()
+    if value != "keep":
+        try:
+            subject_id = int(value)
+        except ValueError:
+            await callback.answer()
+            return
+        async with SessionLocal() as session:
+            subjects = await subj_svc.list_subjects(session, data["group_id"])
+        subject = next((s for s in subjects if s.id == subject_id), None)
+        if subject is None:
+            await callback.answer()
+            return
+        await state.update_data(subject_id=subject.id, subject_name=subject.name)
+
+    await state.set_state(EditAssignment.waiting_title)
+    if isinstance(callback.message, Message):
+        new_data = await state.get_data()
+        await callback.message.answer(
+            texts.EDIT_STEP_TITLE.format(current=new_data["title"])
+        )
+    await callback.answer()
+
+
+@router.message(EditAssignment.waiting_title, F.text)
+async def edit_title(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    data = await state.get_data()
+    if raw != _SKIP_TOKEN:
+        if not raw:
+            await message.answer(texts.EDIT_STEP_TITLE.format(current=data["title"]))
+            return
+        if len(raw) > _TITLE_MAX:
+            await message.answer(texts.TITLE_TOO_LONG)
+            return
+        await state.update_data(title=raw)
+
+    new_data = await state.get_data()
+    current_desc = new_data.get("description") or "—"
+    await state.set_state(EditAssignment.waiting_description)
+    await message.answer(texts.EDIT_STEP_DESCRIPTION.format(current=current_desc))
+
+
+@router.message(EditAssignment.waiting_description, F.text)
+async def edit_description(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    if raw == _SKIP_TOKEN:
+        pass
+    elif raw == _CLEAR_TOKEN:
+        await state.update_data(description=None)
+    else:
+        if len(raw) > _DESCRIPTION_MAX:
+            await message.answer(texts.DESCRIPTION_TOO_LONG)
+            return
+        await state.update_data(description=raw)
+
+    data = await state.get_data()
+    deadline_utc = datetime.fromisoformat(data["deadline_iso"])
+    current_dl = format_deadline_display(deadline_utc, data["group_tz"])
+    await state.set_state(EditAssignment.waiting_deadline)
+    await message.answer(texts.EDIT_STEP_DEADLINE.format(current=current_dl))
+
+
+@router.message(EditAssignment.waiting_deadline, F.text)
+async def edit_deadline(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    data = await state.get_data()
+    if raw != _SKIP_TOKEN:
+        try:
+            deadline_utc = parse_deadline(raw, data["group_tz"])
+        except DeadlineParseError as e:
+            await message.answer(texts.ADD_DEADLINE_ERROR.format(error=str(e)))
+            return
+        await state.update_data(deadline_iso=deadline_utc.isoformat())
+
+    new_data = await state.get_data()
+    current_links = _links_display(new_data.get("links") or [])
+    await state.set_state(EditAssignment.waiting_links)
+    await message.answer(texts.EDIT_STEP_LINKS.format(current=current_links))
+
+
+@router.message(EditAssignment.waiting_links, F.text)
+async def edit_links(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    if raw == _SKIP_TOKEN:
+        pass
+    elif raw == _CLEAR_TOKEN:
+        await state.update_data(links=[])
+    else:
+        links = parse_links(raw)
+        if not links:
+            await message.answer(texts.ADD_LINKS_NONE_VALID)
+            return
+        await state.update_data(links=links)
+
+    await state.set_state(EditAssignment.waiting_confirm)
+    data = await state.get_data()
+    summary = _build_summary(data)
+    await message.answer(
+        f"{texts.EDIT_CONFIRM_HEADER}\n\n{summary}",
+        reply_markup=confirm_kb(prefix="edit_confirm", yes_label="✓ Сохранить"),
+    )
+
+
+@router.callback_query(EditAssignment.waiting_confirm, F.data == "edit_confirm:no")
+async def edit_confirm_no(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    if isinstance(callback.message, Message):
+        await callback.message.answer(texts.EDIT_CANCELLED)
+    await callback.answer()
+
+
+@router.callback_query(EditAssignment.waiting_confirm, F.data == "edit_confirm:yes")
+async def edit_confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    deadline_utc = datetime.fromisoformat(data["deadline_iso"])
+    atype = AssignmentType(data["type"])
+    deadline_changed = data["deadline_iso"] != data["orig_deadline_iso"]
+
+    async with SessionLocal() as session, session.begin():
+        a = await session.get(Assignment, data["assignment_id"])
+        if a is None or not a.is_active:
+            await state.clear()
+            if isinstance(callback.message, Message):
+                await callback.message.answer(texts.DELETE_NOT_FOUND.format(n=data["short_id"]))
+            await callback.answer()
+            return
+        await assn_svc.update_assignment(
+            session,
+            a,
+            assignment_type=atype,
+            subject_id=data["subject_id"],
+            title=data["title"],
+            description=data.get("description"),
+            links=data.get("links", []),
+            deadline_utc=deadline_utc,
+        )
+        if deadline_changed:
+            await assn_svc.clear_reminder_log(session, a.id)
+
+    await state.clear()
+    if isinstance(callback.message, Message):
+        await callback.message.answer(texts.EDIT_OK.format(n=data["short_id"]))
+    await callback.answer()
