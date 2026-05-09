@@ -34,7 +34,7 @@ HELP = (
     "/settings — личные настройки в активной группе\n"
     "/leave — выйти из активной группы\n"
     "\n"
-    "Только для creator группы:\n"
+    "Только для создателя группы:\n"
     "/transfer_ownership — передать роль создателя\n"
     "/delete_group — удалить группу\n"
     "/bind_chat — привязать групповой чат для дайджестов (в чате)\n"
@@ -51,8 +51,8 @@ USAGE_JOIN = "Использование: /join <код>\nКод имеет фо
 GROUP_NAME_TOO_LONG = "Название слишком длинное (максимум 128 символов)."
 GROUP_CREATED = (
     "Группа «{name}» создана.\n"
-    "Invite-код: {code}\n\n"
-    "Чтобы пригласить участников, отправь им: /join {code}"
+    "Invite-код: `{code}`\n\n"
+    "Чтобы пригласить участников, отправь им: `/join {code}`"
 )
 
 JOIN_NOT_FOUND = "Группа с таким кодом не найдена. Проверь формат: XXXX-XXXX-XXXX."
@@ -173,7 +173,11 @@ BIND_CHAT_NO_ACTIVE_GROUP = (
 )
 BIND_CHAT_NOT_CREATOR = "Привязать чат может только создатель группы."
 BIND_CHAT_BOT_CANT_WRITE = "У бота нет прав отправлять сообщения в этом чате."
+BIND_CHAT_PICK = "К какой группе привязать этот чат?"
+BIND_CHAT_NO_CREATOR_GROUPS = "У тебя нет групп, в которых ты создатель. Привязка невозможна."
+BIND_CHAT_ALREADY_HERE = "Этот чат уже привязан к группе «{group}»."
 BIND_CHAT_OK = "Чат «{chat}» привязан к группе «{group}»."
+BIND_CHAT_MOVED = "Чат переехал на группу «{group}» (был привязан к «{from_group}»)."
 BIND_CHAT_REPLACE_CONFIRM = (
     "К группе «{group}» уже привязан другой чат. Заменить на текущий?"
 )
@@ -199,9 +203,9 @@ GROUP_SETTINGS_PICK_TZ = "Изменить TZ"
 GROUP_SETTINGS_PICK_DAY = "День дайджеста"
 GROUP_SETTINGS_PICK_HOUR = "Час дайджеста"
 GROUP_SETTINGS_TZ_PROMPT = (
-    "Введи название TZ в формате IANA, например: Europe/Vilnius, Europe/Moscow, Asia/Tbilisi."
+    "Введи название TZ в формате IANA, например: Europe/Moscow, Asia/Tbilisi."
 )
-GROUP_SETTINGS_TZ_INVALID = "Не распознал TZ. Пример: Europe/Vilnius."
+GROUP_SETTINGS_TZ_INVALID = "Не распознал TZ. Пример: Europe/Moscow."
 GROUP_SETTINGS_TZ_OK = "TZ обновлена: {tz}."
 GROUP_SETTINGS_DAY_PROMPT = "Выбери день недели для дайджеста:"
 GROUP_SETTINGS_HOUR_PROMPT = "Выбери час дайджеста (по локальному времени группы):"

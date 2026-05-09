@@ -3,6 +3,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.types import BotCommand, BotCommandScopeAllPrivateChats
 
 from src.config import settings
 from src.handlers import (
@@ -48,12 +49,28 @@ async def main() -> None:
 
     me = await bot.get_me()
     logger.info("Запуск бота @%s (id=%s)", me.username, me.id)
+    await _setup_bot_commands(bot)
     await start_scheduler(bot)
     try:
         await dp.start_polling(bot)
     finally:
         await shutdown_scheduler()
         await bot.session.close()
+
+
+async def _setup_bot_commands(bot: Bot) -> None:
+    """Регистрирует список команд (показываются при вводе '/')."""
+    private_cmds = [
+        BotCommand(command="menu", description="Главное меню"),
+        BotCommand(command="add", description="Добавить задание"),
+        BotCommand(command="list", description="Список заданий"),
+        BotCommand(command="digest", description="Ближайшие дедлайны (14 дней)"),
+        BotCommand(command="my_groups", description="Мои группы / переключить"),
+        BotCommand(command="settings", description="Личные настройки"),
+        BotCommand(command="cancel", description="Отменить текущий ввод"),
+        BotCommand(command="help", description="Справка"),
+    ]
+    await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
 
 
 if __name__ == "__main__":

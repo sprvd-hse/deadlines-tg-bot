@@ -414,38 +414,90 @@ async def cmd_bind_chat(message: Message) -> None:
         await message.answer(texts.BIND_CHAT_NOT_GROUP)
         return
 
-    tg_id, username, full_name = _user_meta(message.from_user)
-    async with SessionLocal() as session, session.begin():
-        user = await get_or_create_user(session, tg_id, username, full_name)
-        group = await get_active_group(session, user)
-        if group is None:
-            await message.answer(texts.BIND_CHAT_NO_ACTIVE_GROUP)
-            return
-        if not await is_creator(session, user.id, group.id):
-            await message.answer(texts.BIND_CHAT_NOT_CREATOR)
-            return
-        existing_chat_id = group.chat_id
-        group_id, group_name = group.id, group.name
-
     if not await _bot_can_send_in(message.bot, message.chat.id):
         await message.answer(texts.BIND_CHAT_BOT_CANT_WRITE)
         return
 
-    if existing_chat_id is not None and existing_chat_id != message.chat.id:
-        await message.answer(
-            texts.BIND_CHAT_REPLACE_CONFIRM.format(group=group_name),
-            reply_markup=yes_no_kb(prefix=f"bindchat:{group_id}:{message.chat.id}"),
-        )
+    tg_id, username, full_name = _user_meta(message.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        groups = await list_user_groups(session, user)
+        creator_groups = [g for g, role in groups if role == MemberRole.creator]
+
+    if not creator_groups:
+        await message.answer(texts.BIND_CHAT_NO_CREATOR_GROUPS)
         return
 
-    async with SessionLocal() as session, session.begin():
-        from src.db.models import Group as _G
-        g = await session.get(_G, group_id)
-        if g is not None:
-            g.chat_id = message.chat.id
+    rows: list[list[InlineKeyboardButton]] = []
+    for g in creator_groups:
+        suffix = " ✓" if g.chat_id == message.chat.id else ""
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{g.name}{suffix}",
+                    callback_data=f"bindp:{g.id}",
+                )
+            ]
+        )
+    await message.answer(
+        texts.BIND_CHAT_PICK,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
 
-    chat_title = message.chat.title or str(message.chat.id)
-    await message.answer(texts.BIND_CHAT_OK.format(chat=chat_title, group=group_name))
+
+@router.callback_query(F.data.regexp(r"^bindp:\d+$"))
+async def cb_bind_pick(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None:
+        await callback.answer()
+        return
+    target_group_id = int(callback.data.rsplit(":", 1)[1])
+    msg = callback.message
+    if not isinstance(msg, Message):
+        await callback.answer()
+        return
+    chat_id = msg.chat.id
+    chat_title = msg.chat.title or str(chat_id)
+
+    tg_id, username, full_name = _user_meta(callback.from_user)
+    async with SessionLocal() as session, session.begin():
+        user = await get_or_create_user(session, tg_id, username, full_name)
+        if not await is_creator(session, user.id, target_group_id):
+            await callback.answer(texts.BIND_CHAT_NOT_CREATOR, show_alert=True)
+            return
+        from sqlalchemy import select as _select
+
+        from src.db.models import Group as _G
+        target = await session.get(_G, target_group_id)
+        if target is None:
+            await callback.answer()
+            return
+        if target.chat_id == chat_id:
+            await msg.edit_text(texts.BIND_CHAT_ALREADY_HERE.format(group=target.name))
+            await callback.answer()
+            return
+
+        # Если этот же чат уже привязан к ДРУГОЙ группе — отвязываем.
+        prev = (
+            await session.execute(
+                _select(_G).where(_G.chat_id == chat_id, _G.id != target_group_id)
+            )
+        ).scalar_one_or_none()
+        prev_name = prev.name if prev is not None else None
+        if prev is not None:
+            prev.chat_id = None
+
+        target.chat_id = chat_id
+        target_name = target.name
+
+    if prev_name:
+        await msg.edit_text(
+            texts.BIND_CHAT_MOVED.format(group=target_name, from_group=prev_name)
+        )
+    else:
+        await msg.edit_text(
+            texts.BIND_CHAT_OK.format(chat=chat_title, group=target_name)
+        )
+    await callback.answer()
 
 
 @router.callback_query(F.data.regexp(r"^bindchat:\d+:-?\d+:(yes|no)$"))
