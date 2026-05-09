@@ -14,6 +14,10 @@ from bot.keyboards import (
     confirm_kb,
     subjects_kb,
 )
+from bot.scheduler import (
+    cancel_assignment_reminders,
+    schedule_assignment_reminders,
+)
 from bot.services import assignments as assn_svc
 from bot.services import subjects as subj_svc
 from bot.services.deadline_parser import DeadlineParseError, parse_deadline
@@ -216,6 +220,8 @@ async def add_confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
         )
         short_id, title = assignment.short_id, assignment.title
 
+    schedule_assignment_reminders(assignment)
+
     await state.clear()
     if isinstance(callback.message, Message):
         await callback.message.answer(texts.ADD_CREATED.format(short_id=short_id, title=title))
@@ -342,6 +348,13 @@ async def cmd_delete(message: Message, command: CommandObject) -> None:
             requesting_user_id=user.id,
             is_creator_of_group=is_grp_creator,
         )
+        deleted_id: int | None = None
+        if status == "ok":
+            deleted = await assn_svc.get_by_short_id(session, group.id, short_id)
+            deleted_id = deleted.id if deleted is not None else None
+
+    if deleted_id is not None:
+        cancel_assignment_reminders(deleted_id)
 
     if status == "not_found":
         await message.answer(texts.DELETE_NOT_FOUND.format(n=short_id))
@@ -651,6 +664,10 @@ async def edit_confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
         )
         if deadline_changed:
             await assn_svc.clear_reminder_log(session, a.id)
+        updated = a
+
+    cancel_assignment_reminders(updated.id)
+    schedule_assignment_reminders(updated)
 
     await state.clear()
     if isinstance(callback.message, Message):

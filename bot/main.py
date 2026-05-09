@@ -5,6 +5,7 @@ from aiogram import Bot, Dispatcher
 
 from bot.config import settings
 from bot.handlers import assignments, common, groups, subjects
+from bot.scheduler import shutdown_scheduler, start_scheduler
 
 
 async def main() -> None:
@@ -23,9 +24,11 @@ async def main() -> None:
 
     me = await bot.get_me()
     logger.info("Запуск бота @%s (id=%s)", me.username, me.id)
+    await start_scheduler(bot)
     try:
         await dp.start_polling(bot)
     finally:
+        await shutdown_scheduler()
         await bot.session.close()
 
 
