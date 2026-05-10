@@ -245,6 +245,15 @@ async def _render_task_card(callback: CallbackQuery, assignment_id: int) -> None
                 ),
             ]
         )
+        if a.deadline is None:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="📦 Закрыть как прошедшее",
+                        callback_data=f"m:task:{a.id}:close",
+                    )
+                ]
+            )
     rows.append([InlineKeyboardButton(text="📋 К списку", callback_data="m:tasks")])
 
     await render(callback, "\n".join(lines), with_back_home(rows))
@@ -306,6 +315,41 @@ async def cb_task_del_confirm(callback: CallbackQuery) -> None:
         await callback.answer("Уже удалено")
     else:
         await callback.answer("Не найдено")
+    await _render_task_card(callback, assignment_id)
+
+
+@router.callback_query(F.data.regexp(r"^m:task:\d+:close$"))
+async def cb_task_close_open_deadline(callback: CallbackQuery) -> None:
+    if callback.data is None or callback.from_user is None:
+        await callback.answer()
+        return
+    assignment_id = int(callback.data.split(":")[2])
+    ctx = await _user_ctx(callback)
+    if ctx is None:
+        await callback.answer(texts.NO_ACTIVE_GROUP, show_alert=True)
+        return
+    user_id, group_id, _tz, creator_flag = ctx
+    async with SessionLocal() as session, session.begin():
+        a = await session.get(Assignment, assignment_id)
+        if a is None or a.group_id != group_id:
+            await callback.answer()
+            return
+        status = await assn_svc.archive_to_passed(
+            session,
+            group_id=group_id,
+            short_id=a.short_id,
+            requesting_user_id=user_id,
+            is_creator_of_group=creator_flag,
+        )
+
+    if status == "forbidden":
+        await callback.answer(texts.DELETE_FORBIDDEN, show_alert=True)
+    elif status == "has_deadline":
+        await callback.answer("У задания уже есть дедлайн")
+    elif status == "not_found":
+        await callback.answer("Не найдено")
+    else:
+        await callback.answer("Перенесено в прошедшие")
     await _render_task_card(callback, assignment_id)
 
 

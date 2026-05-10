@@ -177,6 +177,29 @@ async def unmark_completed(
     return "ok" if result.rowcount else "not_marked"
 
 
+ArchiveStatus = Literal["ok", "not_found", "forbidden", "has_deadline"]
+
+
+async def archive_to_passed(
+    session: AsyncSession,
+    *,
+    group_id: int,
+    short_id: int,
+    requesting_user_id: int,
+    is_creator_of_group: bool,
+) -> ArchiveStatus:
+    """Переносит задание без дедлайна в «Прошедшие», проставляя deadline=now()."""
+    a = await get_by_short_id(session, group_id, short_id)
+    if a is None or not a.is_active:
+        return "not_found"
+    if a.created_by_user_id != requesting_user_id and not is_creator_of_group:
+        return "forbidden"
+    if a.deadline is not None:
+        return "has_deadline"
+    a.deadline = datetime.now(tz=UTC)
+    return "ok"
+
+
 async def update_assignment(
     session: AsyncSession,
     assignment: Assignment,
