@@ -66,8 +66,8 @@ USAGE_JOIN = "Использование: /join <код>\nКод имеет фо
 GROUP_NAME_TOO_LONG = "Название слишком длинное (максимум 128 символов)."
 GROUP_CREATED = (
     "Группа «{name}» создана.\n"
-    "Invite-код: `{code}`\n\n"
-    "Чтобы пригласить участников, отправь им: `/join {code}`"
+    "Invite-код: <code>{code}</code>\n\n"
+    "Чтобы пригласить участников, отправь им: <code>/join {code}</code>"
 )
 
 JOIN_NOT_FOUND = "Группа с таким кодом не найдена. Проверь формат: XXXX-XXXX-XXXX."

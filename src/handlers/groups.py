@@ -67,7 +67,11 @@ async def cmd_create_group(message: Message, command: CommandObject) -> None:
         group = await create_group(session, user, name, settings.default_timezone)
         group_name, invite_code = group.name, group.invite_code
 
-    await message.answer(texts.GROUP_CREATED.format(name=group_name, code=invite_code))
+    import html
+    await message.answer(
+        texts.GROUP_CREATED.format(name=html.escape(group_name), code=invite_code),
+        parse_mode="HTML",
+    )
 
 
 @router.message(Command("join"))

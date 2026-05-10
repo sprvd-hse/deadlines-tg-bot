@@ -166,7 +166,11 @@ async def msg_group_new_name(message: Message, state: FSMContext) -> None:
         group_name, invite_code = group.name, group.invite_code
 
     await state.clear()
-    await message.answer(texts.GROUP_CREATED.format(name=group_name, code=invite_code))
+    import html
+    await message.answer(
+        texts.GROUP_CREATED.format(name=html.escape(group_name), code=invite_code),
+        parse_mode="HTML",
+    )
     await open_home(message)
 
 
