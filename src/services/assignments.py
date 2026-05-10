@@ -4,11 +4,9 @@ from typing import Literal
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.models import Assignment, AssignmentCompletion, AssignmentType, ReminderLog
+from src.db.models import Assignment, AssignmentType, ReminderLog
 
 DeleteStatus = Literal["ok", "not_found", "forbidden", "already_deleted"]
-CompleteStatus = Literal["ok", "already", "not_found"]
-UncompleteStatus = Literal["ok", "not_marked", "not_found"]
 
 PASSED_DAYS_BACK = 14
 
@@ -124,57 +122,6 @@ async def list_passed(
         stmt = stmt.where(Assignment.subject_id == subject_id)
     stmt = stmt.order_by(Assignment.deadline.desc())
     return list((await session.execute(stmt)).scalars())
-
-
-async def completed_ids_for_user(
-    session: AsyncSession, user_id: int, assignment_ids: list[int]
-) -> set[int]:
-    if not assignment_ids:
-        return set()
-    rows = (
-        await session.execute(
-            select(AssignmentCompletion.assignment_id).where(
-                AssignmentCompletion.user_id == user_id,
-                AssignmentCompletion.assignment_id.in_(assignment_ids),
-            )
-        )
-    ).scalars()
-    return set(rows)
-
-
-async def mark_completed(
-    session: AsyncSession, *, group_id: int, short_id: int, user_id: int
-) -> CompleteStatus:
-    a = await get_by_short_id(session, group_id, short_id)
-    if a is None or not a.is_active:
-        return "not_found"
-    existing = (
-        await session.execute(
-            select(AssignmentCompletion.id).where(
-                AssignmentCompletion.assignment_id == a.id,
-                AssignmentCompletion.user_id == user_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        return "already"
-    session.add(AssignmentCompletion(assignment_id=a.id, user_id=user_id))
-    return "ok"
-
-
-async def unmark_completed(
-    session: AsyncSession, *, group_id: int, short_id: int, user_id: int
-) -> UncompleteStatus:
-    a = await get_by_short_id(session, group_id, short_id)
-    if a is None or not a.is_active:
-        return "not_found"
-    result = await session.execute(
-        delete(AssignmentCompletion).where(
-            AssignmentCompletion.assignment_id == a.id,
-            AssignmentCompletion.user_id == user_id,
-        )
-    )
-    return "ok" if result.rowcount else "not_marked"
 
 
 ArchiveStatus = Literal["ok", "not_found", "forbidden", "has_deadline"]

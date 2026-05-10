@@ -124,15 +124,29 @@ async def _render_tasks(callback: CallbackQuery | Message) -> None:
     text_lines: list[str] = ["📋 *Задания*"]
     rows: list[list[InlineKeyboardButton]] = []
 
+    # Жёсткие лимиты Telegram: 4096 символов в сообщении, ~100 inline-кнопок.
+    # Берём с запасом и при превышении печатаем хвост текстом без кнопок.
+    MAX_BUTTONS = 90
+    MAX_TEXT = 3800
+    truncated_buttons = 0
+
+    def _fits() -> bool:
+        return len(rows) < MAX_BUTTONS and sum(len(line) + 1 for line in text_lines) < MAX_TEXT
+
     for sid in subject_ids:
         name = subj_by_id.get(sid, "?")
+        actives = by_subject_active.get(sid, [])
+        passeds = by_subject_passed.get(sid, [])
+        if not _fits():
+            truncated_buttons += len(actives) + len(passeds)
+            continue
         text_lines.append("")
         text_lines.append(f"*{_md2(name)}*")
 
-        actives = by_subject_active.get(sid, [])
-        passeds = by_subject_passed.get(sid, [])
-
         for i, a in enumerate(actives, 1):
+            if not _fits():
+                truncated_buttons += 1
+                continue
             dl = _short_deadline(a, tz_name)
             text_lines.append(f"{i}\\. {_md2(a.title)} — {_md2(dl)}")
             rows.append(
@@ -147,8 +161,11 @@ async def _render_tasks(callback: CallbackQuery | Message) -> None:
         if passeds:
             text_lines.append("_Прошедшие:_")
             for i, a in enumerate(passeds, 1):
+                if not _fits():
+                    truncated_buttons += 1
+                    continue
                 dl = _short_deadline(a, tz_name)
-                text_lines.append(f"{i}\\. {_md2(a.title)} — {_md2(dl)}")
+                text_lines.append(f"П{i}\\. {_md2(a.title)} — {_md2(dl)}")
                 rows.append(
                     [
                         InlineKeyboardButton(
@@ -157,6 +174,10 @@ async def _render_tasks(callback: CallbackQuery | Message) -> None:
                         )
                     ]
                 )
+
+    if truncated_buttons:
+        text_lines.append("")
+        text_lines.append(f"_…и ещё {truncated_buttons} \\(используй /digest\\)_")
 
     rows.append([InlineKeyboardButton(text=texts.DIGEST_BTN, callback_data="m:tasks:digest")])
     await _send_md2(callback, "\n".join(text_lines), with_back_home(rows))

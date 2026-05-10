@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import Assignment, Group, GroupMember, Subject, User
 from src.keyboards import ASSIGNMENT_TYPE_LABELS
+from src.utils import ensure_utc
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ async def build_digest_messages(
     day_order: list[str] = []
 
     for a, subject_name in rows:
-        local = a.deadline.astimezone(tz)
+        local = ensure_utc(a.deadline).astimezone(tz)
         day_key = local.strftime("%Y-%m-%d")
         type_label = ASSIGNMENT_TYPE_LABELS.get(a.type, a.type.value)
         time_str = local.strftime("%H:%M")

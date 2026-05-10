@@ -314,75 +314,14 @@ def _build_summary(data: dict) -> str:
     return "\n".join(lines)
 
 
-# ============ /list, /list_subject ============
+# ============ /list (legacy alias) ============
 
 
 @router.message(Command("list"))
 async def cmd_list(message: Message) -> None:
-    await _render_list(message, subject_name=None)
-
-
-@router.message(Command("list_subject"))
-async def cmd_list_subject(message: Message, command: CommandObject) -> None:
-    name = (command.args or "").strip()
-    if not name:
-        await message.answer(texts.USAGE_LIST_SUBJECT)
-        return
-    await _render_list(message, subject_name=name)
-
-
-async def _render_list(message: Message, subject_name: str | None) -> None:
-    meta = _user_meta(message)
-    if meta is None:
-        return
-    tg_id, username, full_name = meta
-
-    async with SessionLocal() as session, session.begin():
-        user = await get_or_create_user(session, tg_id, username, full_name)
-        group = await get_active_group(session, user)
-        if group is None:
-            await message.answer(texts.NO_ACTIVE_GROUP)
-            return
-
-        subject_id: int | None = None
-        if subject_name is not None:
-            subject = await subj_svc.get_subject_by_name(session, group.id, subject_name)
-            if subject is None:
-                await message.answer(texts.SUBJECT_NOT_FOUND.format(name=subject_name))
-                return
-            subject_id = subject.id
-
-        active = await assn_svc.list_active(session, group.id, subject_id=subject_id)
-        passed = await assn_svc.list_passed(session, group.id, subject_id=subject_id)
-        all_ids = [a.id for a in active] + [a.id for a in passed]
-        completed = await assn_svc.completed_ids_for_user(session, user.id, all_ids)
-        subjects = await subj_svc.list_subjects(session, group.id)
-        subj_by_id = {s.id: s.name for s in subjects}
-        tz_name = group.timezone
-
-    if not active and not passed:
-        await message.answer(texts.LIST_EMPTY)
-        return
-
-    parts: list[str] = []
-    if active:
-        parts.append(texts.LIST_ACTIVE_HEADER)
-        parts.extend(_render_item(a, subj_by_id, tz_name, a.id in completed) for a in active)
-    if passed:
-        if parts:
-            parts.append("")
-        parts.append(texts.LIST_PASSED_HEADER)
-        parts.extend(_render_item(a, subj_by_id, tz_name, a.id in completed) for a in passed)
-
-    await message.answer("\n".join(parts))
-
-
-def _render_item(a: Assignment, subj_by_id: dict[int, str], tz_name: str, completed: bool) -> str:
-    marker = "✅ " if completed else ""
-    type_label = ASSIGNMENT_TYPE_LABELS.get(a.type, a.type.value)
-    subject_label = subj_by_id.get(a.subject_id, "?")
-    deadline_str = format_deadline_display(a.deadline, tz_name)
-    return f"{marker}#{a.short_id} [{type_label}] {a.title} ({subject_label}) — {deadline_str}"
+    """Совместимость со старой командой: открывает inline-меню заданий."""
+    from src.handlers.menu_tasks import open_tasks_page
+    await open_tasks_page(message, page=0)
 
 
 # ============ /delete ============
