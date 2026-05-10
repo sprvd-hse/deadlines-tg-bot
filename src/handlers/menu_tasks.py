@@ -152,7 +152,7 @@ async def _render_tasks(callback: CallbackQuery | Message) -> None:
             rows.append(
                 [
                     InlineKeyboardButton(
-                        text=f"{i}. {a.title}",
+                        text=a.title,
                         callback_data=f"m:task:{a.id}",
                     )
                 ]
@@ -169,7 +169,7 @@ async def _render_tasks(callback: CallbackQuery | Message) -> None:
                 rows.append(
                     [
                         InlineKeyboardButton(
-                            text=f"П{i}. {a.title}",
+                            text=f"П {a.title}",
                             callback_data=f"m:task:{a.id}",
                         )
                     ]
