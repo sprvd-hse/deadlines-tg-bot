@@ -26,6 +26,11 @@ OFFSETS_BY_TYPE: dict[AssignmentType, list[tuple[ReminderType, timedelta]]] = {
         (ReminderType.advance_3d, timedelta(days=3)),
         (ReminderType.advance_1d, timedelta(days=1)),
     ],
+    AssignmentType.control: [
+        (ReminderType.advance_7d, timedelta(days=7)),
+        (ReminderType.advance_3d, timedelta(days=3)),
+        (ReminderType.advance_1d, timedelta(days=1)),
+    ],
     AssignmentType.exam: [
         (ReminderType.advance_7d, timedelta(days=7)),
         (ReminderType.advance_3d, timedelta(days=3)),

@@ -28,6 +28,7 @@ class MemberRole(enum.StrEnum):
 class AssignmentType(enum.StrEnum):
     homework = "homework"
     test = "test"
+    control = "control"
     exam = "exam"
     lab = "lab"
     project = "project"

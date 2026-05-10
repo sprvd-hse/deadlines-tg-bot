@@ -11,6 +11,7 @@ from src.db.models import AssignmentType, Subject
 ASSIGNMENT_TYPE_LABELS: dict[AssignmentType, str] = {
     AssignmentType.homework: "Домашнее задание",
     AssignmentType.test: "Тест",
+    AssignmentType.control: "Контрольная",
     AssignmentType.exam: "Экзамен",
     AssignmentType.lab: "Лабораторная",
     AssignmentType.project: "Проект",
