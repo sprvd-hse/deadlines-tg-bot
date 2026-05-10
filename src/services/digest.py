@@ -53,6 +53,20 @@ async def build_digest_messages(
             )
         ).all()
     )
+    open_rows = list(
+        (
+            await session.execute(
+                select(Assignment, Subject.name)
+                .join(Subject, Subject.id == Assignment.subject_id)
+                .where(
+                    Assignment.group_id == group.id,
+                    Assignment.is_active.is_(True),
+                    Assignment.deadline.is_(None),
+                )
+                .order_by(Subject.name, Assignment.short_id)
+            )
+        ).all()
+    )
     tz = ZoneInfo(group.timezone)
     by_day: dict[str, list[str]] = {}
     day_order: list[str] = []
@@ -68,7 +82,7 @@ async def build_digest_messages(
             day_order.append(day_key)
         by_day[day_key].append(line)
 
-    if not day_order:
+    if not day_order and not open_rows:
         return []
 
     header = f"Дайджест группы «{group.name}» — задания на ближайшие {DIGEST_HORIZON_DAYS} дней:"
@@ -78,6 +92,15 @@ async def build_digest_messages(
         weekday = _RU_WEEKDAYS[d.weekday()]
         title = f"{d.day:02d}.{d.month:02d} ({weekday})"
         day_blocks.append("\n".join([title, *by_day[day_key]]))
+
+    if open_rows:
+        open_lines = ["До конца модуля:"]
+        for a, subject_name in open_rows:
+            type_label = ASSIGNMENT_TYPE_LABELS.get(a.type, a.type.value)
+            open_lines.append(
+                f"  #{a.short_id} [{type_label}] {a.title} ({subject_name})"
+            )
+        day_blocks.append("\n".join(open_lines))
 
     messages: list[str] = []
     current = header
