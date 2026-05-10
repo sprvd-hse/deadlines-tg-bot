@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.models import Assignment, Group, GroupMember, Subject, User
+from src.db.models import Assignment, AssignmentType, Group, GroupMember, Subject, User
 from src.keyboards import ASSIGNMENT_TYPE_LABELS
 from src.utils import ensure_utc
 
@@ -68,38 +68,49 @@ async def build_digest_messages(
         ).all()
     )
     tz = ZoneInfo(group.timezone)
-    by_day: dict[str, list[str]] = {}
+    by_day: dict[str, list[tuple[Assignment, str]]] = {}
     day_order: list[str] = []
 
     for a, subject_name in rows:
         local = ensure_utc(a.deadline).astimezone(tz)
         day_key = local.strftime("%Y-%m-%d")
-        type_label = ASSIGNMENT_TYPE_LABELS.get(a.type, a.type.value)
-        time_str = local.strftime("%H:%M")
-        line = f"  {time_str} #{a.short_id} [{type_label}] {a.title} ({subject_name})"
         if day_key not in by_day:
             by_day[day_key] = []
             day_order.append(day_key)
-        by_day[day_key].append(line)
+        by_day[day_key].append((a, subject_name))
 
     if not day_order and not open_rows:
         return []
 
+    def _type_part(a: Assignment) -> str:
+        if a.type == AssignmentType.other:
+            return ""
+        return f"[{ASSIGNMENT_TYPE_LABELS.get(a.type, a.type.value)}] "
+
     header = f"Дайджест группы «{group.name}» — задания на ближайшие {DIGEST_HORIZON_DAYS} дней:"
     day_blocks: list[str] = []
+    counter = 1
     for day_key in day_order:
         d = datetime.strptime(day_key, "%Y-%m-%d")
         weekday = _RU_WEEKDAYS[d.weekday()]
         title = f"{d.day:02d}.{d.month:02d} ({weekday})"
-        day_blocks.append("\n".join([title, *by_day[day_key]]))
+        lines = [title]
+        for a, subject_name in by_day[day_key]:
+            local = ensure_utc(a.deadline).astimezone(tz)
+            time_str = local.strftime("%H:%M")
+            lines.append(
+                f"  {counter}. {time_str} {_type_part(a)}{a.title} ({subject_name})"
+            )
+            counter += 1
+        day_blocks.append("\n".join(lines))
 
     if open_rows:
         open_lines = ["До конца модуля:"]
         for a, subject_name in open_rows:
-            type_label = ASSIGNMENT_TYPE_LABELS.get(a.type, a.type.value)
             open_lines.append(
-                f"  #{a.short_id} [{type_label}] {a.title} ({subject_name})"
+                f"  {counter}. {_type_part(a)}{a.title} ({subject_name})"
             )
+            counter += 1
         day_blocks.append("\n".join(open_lines))
 
     messages: list[str] = []
