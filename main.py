@@ -69,6 +69,7 @@ async def _setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="add", description="Добавить задание"),
         BotCommand(command="list", description="Список заданий"),
         BotCommand(command="digest", description="Ближайшие дедлайны (14 дней)"),
+        BotCommand(command="all", description="Все задания группы"),
         BotCommand(command="my_groups", description="Мои группы / переключить"),
         BotCommand(command="settings", description="Личные настройки"),
         BotCommand(command="cancel", description="Отменить текущий ввод"),
@@ -77,6 +78,7 @@ async def _setup_bot_commands(bot: Bot) -> None:
     group_cmds = [
         BotCommand(command="bind_chat", description="Привязать этот чат к группе"),
         BotCommand(command="digest", description="Ближайшие дедлайны (14 дней)"),
+        BotCommand(command="all", description="Все задания группы"),
         BotCommand(command="help", description="Справка"),
     ]
     await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
