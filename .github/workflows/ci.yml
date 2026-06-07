@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    uses: cop1cat-homelab/workflows/.github/workflows/build.yml@main
+    with:
+      image_name: group-deadlines-bot
+
+  deploy:
+    needs: build
+    uses: cop1cat-homelab/workflows/.github/workflows/deploy.yml@main
+    with:
+      service_name: group-deadlines-bot
+      deploy_host: mini-pc
+    secrets:
+      ENV_FILE: ${{ secrets.ENV_FILE }}
