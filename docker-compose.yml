@@ -1,6 +1,6 @@
 services:
   bot:
-    image: ghcr.io/cop1cat/group-deadlines-bot:latest
+    image: ghcr.io/cop1cat-homelab/group-deadlines-bot:latest
     command: sh -c "alembic upgrade head && exec python main.py"
     restart: unless-stopped
     env_file: .env
