@@ -1,97 +1,77 @@
-from aiogram import Router
-from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
 
-from src import texts
 from src.db.session import SessionLocal
-from src.services import subjects as subjects_svc
-from src.services.groups import get_active_group
-from src.services.users import get_or_create_user
+from src.handlers.ui import Event, show, with_group
+from src.services.groups import GroupManager
+from src.states import SubjectInput
+from src.ui import keyboards as kb
+from src.ui.callbacks import Nav, SubjectAction
+from src.views import texts as t
+from src.views.common import esc
 
 router = Router(name="subjects")
-
-_SUBJECT_NAME_MAX = 128
-
-
-def _user_meta(message: Message) -> tuple[int, str | None, str] | None:
-    if message.from_user is None:
-        return None
-    u = message.from_user
-    return u.id, u.username, u.full_name or u.username or "user"
+router.message.filter(F.chat.type == "private")
 
 
-@router.message(Command("subjects"))
-async def cmd_subjects(message: Message) -> None:
-    meta = _user_meta(message)
-    if meta is None:
+@router.callback_query(Nav.filter(F.to == "subjects"))
+async def open_subjects(event: Event, state: FSMContext, *args, **kwargs) -> None:
+    """Экран предметов группы."""
+    await state.clear()
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+    await render_subjects(event)
+
+
+async def render_subjects(event: Event) -> None:
+    """Рисует список предметов."""
+    ctx = await with_group(event)
+    if ctx is None:
         return
-    tg_id, username, full_name = meta
+    async with SessionLocal() as session:
+        subjects = await GroupManager(session).subjects(ctx.group.id)
+    header = t.SUBJECTS_HEADER.format(group=esc(ctx.group.name))
+    body = header if subjects else f"{header}\n\n{t.SUBJECTS_EMPTY}"
+    await show(event, body, kb.subjects_manage_keyboard(subjects))
 
+
+@router.callback_query(SubjectAction.filter(F.action == "add"))
+async def ask_subject_name(callback: CallbackQuery, state: FSMContext) -> None:
+    """Просит название предмета."""
+    await state.set_state(SubjectInput.name)
+    await callback.answer()
+    await show(callback, t.SUBJECT_ASK_NAME)
+
+
+@router.message(SubjectInput.name, F.text)
+async def add_subject(message: Message, state: FSMContext) -> None:
+    """Создаёт предмет."""
+    ctx = await with_group(message)
+    if ctx is None:
+        return
     async with SessionLocal() as session, session.begin():
-        user = await get_or_create_user(session, tg_id, username, full_name)
-        group = await get_active_group(session, user)
-        if group is None:
-            await message.answer(texts.NO_ACTIVE_GROUP)
-            return
-        items = await subjects_svc.list_subjects(session, group.id)
-        names = [s.name for s in items]
-
-    if not names:
-        await message.answer(texts.SUBJECTS_EMPTY)
+        subject, _ = await GroupManager(session).add_subject(
+            group_id=ctx.group.id, name=message.text or ""
+        )
+    if subject is None:
+        await message.answer(t.SUBJECT_DUPLICATE)
         return
-    await message.answer(texts.SUBJECTS_HEADER + "\n" + "\n".join(f"• {n}" for n in names))
+    await state.clear()
+    await message.answer(t.SUBJECT_ADDED.format(name=subject.name))
+    await render_subjects(message)
 
 
-@router.message(Command("add_subject"))
-async def cmd_add_subject(message: Message, command: CommandObject) -> None:
-    meta = _user_meta(message)
-    if meta is None:
+@router.callback_query(SubjectAction.filter(F.action == "del"))
+async def delete_subject(callback: CallbackQuery, callback_data: SubjectAction) -> None:
+    """Удаляет предмет, если на нём нет активных записей."""
+    ctx = await with_group(callback)
+    if ctx is None:
         return
-    name = (command.args or "").strip()
-    if not name:
-        await message.answer(texts.USAGE_ADD_SUBJECT)
-        return
-    if len(name) > _SUBJECT_NAME_MAX:
-        await message.answer(texts.GROUP_NAME_TOO_LONG)
-        return
-
-    tg_id, username, full_name = meta
     async with SessionLocal() as session, session.begin():
-        user = await get_or_create_user(session, tg_id, username, full_name)
-        group = await get_active_group(session, user)
-        if group is None:
-            await message.answer(texts.NO_ACTIVE_GROUP)
-            return
-        created = await subjects_svc.add_subject(session, group.id, name)
-
-    if created is None:
-        await message.answer(texts.SUBJECT_ALREADY_EXISTS.format(name=name))
-    else:
-        await message.answer(texts.SUBJECT_ADDED.format(name=name))
-
-
-@router.message(Command("delete_subject"))
-async def cmd_delete_subject(message: Message, command: CommandObject) -> None:
-    meta = _user_meta(message)
-    if meta is None:
+        status = await GroupManager(session).delete_subject(callback_data.subject_id)
+    if status == "has_items":
+        await callback.answer(t.SUBJECT_HAS_ITEMS, show_alert=True)
         return
-    name = (command.args or "").strip()
-    if not name:
-        await message.answer(texts.USAGE_DELETE_SUBJECT)
-        return
-
-    tg_id, username, full_name = meta
-    async with SessionLocal() as session, session.begin():
-        user = await get_or_create_user(session, tg_id, username, full_name)
-        group = await get_active_group(session, user)
-        if group is None:
-            await message.answer(texts.NO_ACTIVE_GROUP)
-            return
-        status = await subjects_svc.delete_subject(session, group.id, name)
-
-    if status == "not_found":
-        await message.answer(texts.SUBJECT_NOT_FOUND.format(name=name))
-    elif status == "has_assignments":
-        await message.answer(texts.SUBJECT_HAS_ASSIGNMENTS.format(name=name))
-    else:
-        await message.answer(texts.SUBJECT_DELETED.format(name=name))
+    await callback.answer(t.SUBJECT_DELETED)
+    await render_subjects(callback)

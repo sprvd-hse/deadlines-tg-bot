@@ -1,8 +1,8 @@
 """initial
 
-Revision ID: 3ba9aaa8f28a
+Revision ID: 014e2e08b181
 Revises: 
-Create Date: 2026-05-09 18:35:06.827058
+Create Date: 2026-09-02 00:14:26.463006
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '3ba9aaa8f28a'
+revision: str = '014e2e08b181'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -41,7 +41,11 @@ def upgrade() -> None:
     sa.Column('timezone', sa.String(length=64), nullable=False),
     sa.Column('digest_day', sa.Integer(), nullable=False),
     sa.Column('digest_hour', sa.Integer(), nullable=False),
+    sa.Column('digest_last_sent_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('chat_id', sa.BigInteger(), nullable=True),
+    sa.Column('default_task_offsets', sa.JSON(), nullable=False),
+    sa.Column('default_event_offsets', sa.JSON(), nullable=False),
+    sa.Column('reminder_hour', sa.Integer(), nullable=False),
     sa.Column('created_by_user_id', sa.Integer(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.ForeignKeyConstraint(['created_by_user_id'], ['users.id'], ),
@@ -54,7 +58,7 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('group_id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
-    sa.Column('role', sa.Enum('creator', 'member', name='memberrole', native_enum=False, length=16), nullable=False),
+    sa.Column('role', sa.Enum('CREATOR', 'MEMBER', name='memberrole', native_enum=False, length=16), nullable=False),
     sa.Column('personal_reminders_enabled', sa.Boolean(), nullable=False),
     sa.Column('joined_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.ForeignKeyConstraint(['group_id'], ['groups.id'], ondelete='CASCADE'),
@@ -62,6 +66,10 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('group_id', 'user_id', name='uq_group_members_group_user')
     )
+    with op.batch_alter_table('group_members', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_group_members_group_id'), ['group_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_group_members_user_id'), ['user_id'], unique=False)
+
     op.create_table('subjects',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('group_id', sa.Integer(), nullable=False),
@@ -70,16 +78,22 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('group_id', 'name', name='uq_subjects_group_name')
     )
-    op.create_table('assignments',
+    with op.batch_alter_table('subjects', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_subjects_group_id'), ['group_id'], unique=False)
+
+    op.create_table('items',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('group_id', sa.Integer(), nullable=False),
-    sa.Column('short_id', sa.Integer(), nullable=False),
     sa.Column('subject_id', sa.Integer(), nullable=False),
-    sa.Column('type', sa.Enum('homework', 'test', 'exam', 'lab', 'project', 'other', name='assignmenttype', native_enum=False, length=16), nullable=False),
+    sa.Column('short_id', sa.Integer(), nullable=False),
+    sa.Column('kind', sa.Enum('TASK', 'EVENT', name='itemkind', native_enum=False, length=16), nullable=False),
+    sa.Column('category', sa.String(length=16), nullable=False),
     sa.Column('title', sa.String(length=256), nullable=False),
     sa.Column('description', sa.String(length=2048), nullable=True),
     sa.Column('links', sa.JSON(), nullable=False),
-    sa.Column('deadline', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('due_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('reminder_offsets', sa.JSON(), nullable=True),
+    sa.Column('reminders_muted', sa.Boolean(), nullable=False),
     sa.Column('created_by_user_id', sa.Integer(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.Column('is_active', sa.Boolean(), nullable=False),
@@ -87,39 +101,53 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['group_id'], ['groups.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['subject_id'], ['subjects.id'], ondelete='RESTRICT'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('group_id', 'short_id', name='uq_assignments_group_short_id')
+    sa.UniqueConstraint('group_id', 'short_id', name='uq_items_group_short_id')
     )
-    op.create_table('assignment_completions',
-    sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('assignment_id', sa.Integer(), nullable=False),
-    sa.Column('user_id', sa.Integer(), nullable=False),
-    sa.Column('completed_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.ForeignKeyConstraint(['assignment_id'], ['assignments.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('assignment_id', 'user_id', name='uq_assignment_completions_assignment_user')
-    )
+    with op.batch_alter_table('items', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_items_due_at'), ['due_at'], unique=False)
+        batch_op.create_index(batch_op.f('ix_items_group_id'), ['group_id'], unique=False)
+        batch_op.create_index(batch_op.f('ix_items_is_active'), ['is_active'], unique=False)
+        batch_op.create_index(batch_op.f('ix_items_subject_id'), ['subject_id'], unique=False)
+
     op.create_table('reminder_log',
     sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('assignment_id', sa.Integer(), nullable=False),
+    sa.Column('item_id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=True),
-    sa.Column('reminder_type', sa.Enum('digest', 'advance_7d', 'advance_3d', 'advance_1d', name='remindertype', native_enum=False, length=16), nullable=False),
+    sa.Column('offset_minutes', sa.Integer(), nullable=False),
     sa.Column('sent_at', sa.DateTime(timezone=True), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.ForeignKeyConstraint(['assignment_id'], ['assignments.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['item_id'], ['items.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('assignment_id', 'user_id', 'reminder_type', name='uq_reminder_log_assignment_user_type')
+    sa.UniqueConstraint('item_id', 'user_id', 'offset_minutes', name='uq_reminder_log_entry')
     )
+    with op.batch_alter_table('reminder_log', schema=None) as batch_op:
+        batch_op.create_index(batch_op.f('ix_reminder_log_item_id'), ['item_id'], unique=False)
+
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     """Downgrade schema."""
     # ### commands auto generated by Alembic - please adjust! ###
+    with op.batch_alter_table('reminder_log', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_reminder_log_item_id'))
+
     op.drop_table('reminder_log')
-    op.drop_table('assignment_completions')
-    op.drop_table('assignments')
+    with op.batch_alter_table('items', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_items_subject_id'))
+        batch_op.drop_index(batch_op.f('ix_items_is_active'))
+        batch_op.drop_index(batch_op.f('ix_items_group_id'))
+        batch_op.drop_index(batch_op.f('ix_items_due_at'))
+
+    op.drop_table('items')
+    with op.batch_alter_table('subjects', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_subjects_group_id'))
+
     op.drop_table('subjects')
+    with op.batch_alter_table('group_members', schema=None) as batch_op:
+        batch_op.drop_index(batch_op.f('ix_group_members_user_id'))
+        batch_op.drop_index(batch_op.f('ix_group_members_group_id'))
+
     op.drop_table('group_members')
     with op.batch_alter_table('groups', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_groups_invite_code'))

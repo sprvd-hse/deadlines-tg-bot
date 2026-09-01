@@ -10,24 +10,13 @@ from aiogram.types import (
 )
 
 from src.config import settings
-from src.handlers import (
-    assignments,
-    common,
-    groups,
-    menu,
-    menu_add,
-    menu_admin,
-    menu_groups,
-    menu_reply,
-    menu_settings,
-    menu_subjects,
-    menu_tasks,
-    subjects,
-)
+from src.handlers import chat, groupctl, items, menu, reply, subjects
+from src.handlers import settings as settings_handlers
 from src.scheduler import shutdown_scheduler, start_scheduler
 
 
 async def main() -> None:
+    """Точка входа: поднимает бота, планировщик и polling."""
     logging.basicConfig(
         level=settings.log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -37,19 +26,18 @@ async def main() -> None:
     session = AiohttpSession(proxy=settings.bot_proxy_url) if settings.bot_proxy_url else None
     bot = Bot(token=settings.bot_token.get_secret_value(), session=session)
     dp = Dispatcher()
-    dp.include_router(common.router)
-    dp.include_router(menu.router)
-    # menu_reply должен быть до FSM-роутеров — нажатие reply-кнопки отменяет ввод.
-    dp.include_router(menu_reply.router)
-    dp.include_router(menu_tasks.router)
-    dp.include_router(menu_subjects.router)
-    dp.include_router(menu_settings.router)
-    dp.include_router(menu_groups.router)
-    dp.include_router(menu_add.router)
-    dp.include_router(menu_admin.router)
-    dp.include_router(groups.router)
-    dp.include_router(subjects.router)
-    dp.include_router(assignments.router)
+    for router in (
+        menu.router,
+        # reply-роутер обязан быть выше FSM-роутеров:
+        # нажатие нижней кнопки прерывает любой незаконченный ввод.
+        reply.router,
+        items.router,
+        subjects.router,
+        groupctl.router,
+        settings_handlers.router,
+        chat.router,
+    ):
+        dp.include_router(router)
 
     me = await bot.get_me()
     logger.info("Запуск бота @%s (id=%s)", me.username, me.id)
@@ -63,26 +51,20 @@ async def main() -> None:
 
 
 async def _setup_bot_commands(bot: Bot) -> None:
-    """Регистрирует список команд (показываются при вводе '/')."""
-    private_cmds = [
+    """Регистрирует список команд, показываемый при вводе «/»."""
+    private = [
         BotCommand(command="menu", description="Главное меню"),
-        BotCommand(command="add", description="Добавить задание"),
-        BotCommand(command="list", description="Список заданий"),
-        BotCommand(command="digest", description="Ближайшие дедлайны (14 дней)"),
-        BotCommand(command="all", description="Все задания группы"),
-        BotCommand(command="my_groups", description="Мои группы / переключить"),
-        BotCommand(command="settings", description="Личные настройки"),
+        BotCommand(command="join", description="Войти в группу по коду"),
         BotCommand(command="cancel", description="Отменить текущий ввод"),
         BotCommand(command="help", description="Справка"),
     ]
-    group_cmds = [
-        BotCommand(command="bind_chat", description="Привязать этот чат к группе"),
-        BotCommand(command="digest", description="Ближайшие дедлайны (14 дней)"),
-        BotCommand(command="all", description="Все задания группы"),
+    group = [
+        BotCommand(command="bind_chat", description="Привязать чат к группе"),
+        BotCommand(command="digest", description="Ближайшие дедлайны"),
         BotCommand(command="help", description="Справка"),
     ]
-    await bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
-    await bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
+    await bot.set_my_commands(private, scope=BotCommandScopeAllPrivateChats())
+    await bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats())
 
 
 if __name__ == "__main__":

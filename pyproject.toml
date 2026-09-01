@@ -52,7 +52,7 @@ ignore = [
 quote-style = "double"
 
 [tool.ty.src]
-include = ["bot"]
+include = ["src"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
