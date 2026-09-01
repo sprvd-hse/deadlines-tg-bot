@@ -69,7 +69,11 @@ SUBJECTS_EMPTY = "Предметов пока нет."
 SUBJECT_ASK_NAME = "Название предмета:"
 SUBJECT_ADDED = "Предмет «{name}» добавлен."
 SUBJECT_DUPLICATE = "Такой предмет уже есть."
-SUBJECT_HAS_ITEMS = "Нельзя удалить: на этом предмете есть активные записи."
+SUBJECT_HAS_ITEMS = "Нельзя удалить: на предмете есть незакрытые задания и даты."
+SUBJECT_CONFIRM_DELETE = (
+    "У предмета «{name}» {count} {word} — они удалятся вместе с ним.\n"
+    "Активных заданий нет. Удаляем?"
+)
 SUBJECT_DELETED = "Предмет удалён."
 
 GROUP_HEADER = (

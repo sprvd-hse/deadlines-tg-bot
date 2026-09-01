@@ -3,6 +3,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from src.db.session import SessionLocal
+from src.domain.humanize import plural_ru
 from src.handlers.ui import Event, show, with_group
 from src.services.groups import GroupManager
 from src.states import SubjectInput
@@ -62,16 +63,37 @@ async def add_subject(message: Message, state: FSMContext) -> None:
     await render_subjects(message)
 
 
-@router.callback_query(SubjectAction.filter(F.action == "del"))
+@router.callback_query(SubjectAction.filter(F.action.in_({"del", "delyes"})))
 async def delete_subject(callback: CallbackQuery, callback_data: SubjectAction) -> None:
-    """Удаляет предмет, если на нём нет активных записей."""
+    """Удаляет предмет, предупреждая о прошедших записях, которые уйдут вместе с ним."""
     ctx = await with_group(callback)
     if ctx is None:
         return
+    confirmed = callback_data.action == "delyes"
     async with SessionLocal() as session, session.begin():
-        status = await GroupManager(session).delete_subject(callback_data.subject_id)
+        manager = GroupManager(session)
+        subject = await manager._subjects.get(callback_data.subject_id)
+        status, passed = await manager.delete_subject(callback_data.subject_id, confirmed=confirmed)
     if status == "has_items":
         await callback.answer(t.SUBJECT_HAS_ITEMS, show_alert=True)
+        return
+    if status == "needs_confirm":
+        await callback.answer()
+        await show(
+            callback,
+            t.SUBJECT_CONFIRM_DELETE.format(
+                name=esc(subject.name if subject else "?"),
+                count=passed,
+                word=plural_ru(passed, "прошедшая запись", "прошедшие записи", "прошедших записей"),
+            ),
+            kb.confirm_keyboard(
+                yes_callback=SubjectAction(
+                    action="delyes", subject_id=callback_data.subject_id
+                ).pack(),
+                no_callback=Nav(to="subjects").pack(),
+                yes_text="🗑 Удалить",
+            ),
+        )
         return
     await callback.answer(t.SUBJECT_DELETED)
     await render_subjects(callback)

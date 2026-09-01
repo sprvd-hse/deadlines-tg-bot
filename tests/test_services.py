@@ -148,7 +148,8 @@ class TestGroupManager:
                 title="Лаба",
             ),
         )
-        assert await GroupManager(session).delete_subject(subject.id) == "has_items"
+        status, _ = await GroupManager(session).delete_subject(subject.id, now=NOW)
+        assert status == "has_items"
 
     async def test_regenerated_invite_code_changes(self, session: AsyncSession):
         _, group, _ = await _seed(session)
@@ -659,7 +660,8 @@ class TestSubjectDeletion:
         items = ItemManager(session)
         await items.delete(item.id)
 
-        assert await GroupManager(session).delete_subject(subject.id) == "ok"
+        status, _ = await GroupManager(session).delete_subject(subject.id, now=NOW)
+        assert status == "ok"
         await session.flush()
 
     async def test_removing_subject_purges_its_archived_items(self, session):
@@ -674,11 +676,13 @@ class TestSubjectDeletion:
         await CompletionRepository(session).mark(user_id=user.id, item_id=item.id)
         await ItemManager(session).delete(item.id)
 
-        assert await GroupManager(session).delete_subject(subject.id) == "ok"
+        status, _ = await GroupManager(session).delete_subject(subject.id, now=NOW)
+        assert status == "ok"
         await session.flush()
         assert await ItemRepository(session).get(item.id) is None
         assert await CompletionRepository(session).users_who_completed(item.id) == set()
 
     async def test_subject_with_live_item_is_kept(self, session):
         _, _, subject, _ = await self._seed_subject_with_item(session)
-        assert await GroupManager(session).delete_subject(subject.id) == "has_items"
+        status, _ = await GroupManager(session).delete_subject(subject.id, now=NOW)
+        assert status == "has_items"
