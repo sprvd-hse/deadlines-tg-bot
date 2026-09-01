@@ -1,15 +1,37 @@
 from datetime import UTC, datetime
 
 from src.domain.enums import KIND_ICONS, category_label
-from src.domain.humanize import WEEKDAYS_RU, format_due_full, format_due_short
+from src.domain.humanize import (
+    OPEN_DUE_LABEL,
+    WEEKDAYS_RU,
+    ensure_utc,
+    format_due_short,
+    humanize_delta,
+)
 from src.domain.models import Group, Item, ItemDraft
 from src.domain.reminders import offsets_label, resolve_offsets
-from src.views.common import bold, esc, italic, join_blocks, link
+from src.views.common import (
+    TIME_FULL,
+    TIME_ONLY,
+    TIME_RELATIVE,
+    bold,
+    esc,
+    expandable_quote,
+    italic,
+    join_blocks,
+    link,
+    quote,
+    raw_expandable_quote,
+    time_tag,
+)
 
 LIST_HEADER_TASKS = "📝 Задачи"
 LIST_HEADER_EVENTS = "📅 Важные даты"
 EMPTY_LIST = "Пока пусто. Нажми «➕ Добавить», чтобы завести первую задачу или важную дату."
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+LONG_DESCRIPTION = 200
+MANY_LINKS = 3
 
 EMPTY_PASSED = "Прошедших записей нет."
 
@@ -43,14 +65,14 @@ def render_passed(
     """Собирает текст экрана прошедших записей."""
     if not items:
         return EMPTY_PASSED
-    lines = [bold("🗄 Прошедшие")]
+    lines = []
     for index, item in enumerate(items, start=1):
         subject = subject_names.get(item.subject_id, "?")
-        due = format_due_short(item.due_at, group.tz, now)
         lines.append(
-            f"{index}. {KIND_ICONS[item.kind]} {esc(item.title)} — {esc(due)} · {italic(subject)}"
+            f"{index}. {KIND_ICONS[item.kind]} {esc(item.title)}"
+            f" — {_due_short(item, group, now)} · {italic(subject)}"
         )
-    return "\n".join(lines)
+    return f"{bold('🗄 Прошедшие')}\n{raw_expandable_quote(chr(10).join(lines))}"
 
 
 def render_card(*, item: Item, subject_name: str, group: Group, now: datetime) -> str:
@@ -59,12 +81,11 @@ def render_card(*, item: Item, subject_name: str, group: Group, now: datetime) -
         f"{KIND_ICONS[item.kind]} {bold(item.title)}\n"
         f"{esc(category_label(item.kind, item.category))} · {italic(subject_name)}"
     )
-    due_line = f"🕒 {esc(format_due_full(item.due_at, group.tz, now))}"
-    blocks = [head, due_line]
+    blocks = [head, f"🕒 {_due_full(item.due_at, group, now)}"]
     if item.description:
-        blocks.append(esc(item.description))
+        blocks.append(_description_block(item.description))
     if item.links:
-        blocks.append("\n".join(link(url, url) for url in item.links))
+        blocks.append(_links_block(item.links))
     blocks.append(f"🔔 {esc(render_reminder_summary(item, group))}")
     return join_blocks(blocks)
 
@@ -77,11 +98,11 @@ def render_draft_summary(
         f"{KIND_ICONS[draft.kind]} {bold(draft.title)}\n"
         f"{esc(category_label(draft.kind, draft.category))} · {italic(subject_name)}"
     )
-    blocks = [head, f"🕒 {esc(format_due_full(draft.due_at, group.tz, now))}"]
+    blocks = [head, f"🕒 {_due_full(draft.due_at, group, now)}"]
     if draft.description:
-        blocks.append(esc(draft.description))
+        blocks.append(_description_block(draft.description))
     if draft.links:
-        blocks.append("\n".join(link(url, url) for url in draft.links))
+        blocks.append(_links_block(draft.links))
     offsets = resolve_offsets(
         kind=draft.kind,
         item_offsets=draft.reminder_offsets,
@@ -130,9 +151,9 @@ def render_digest(
         for due_at, item in day_items:
             local = due_at.astimezone(group.tz)
             subject = subject_names.get(item.subject_id, "?")
+            clock = time_tag(f"{local.hour:02d}:{local.minute:02d}", due_at, TIME_ONLY)
             lines.append(
-                f"{number}. {local.hour:02d}:{local.minute:02d} {KIND_ICONS[item.kind]}"
-                f" {esc(item.title)} · {italic(subject)}"
+                f"{number}. {clock} {KIND_ICONS[item.kind]} {esc(item.title)} · {italic(subject)}"
             )
             number += 1
         blocks.append("\n".join(lines))
@@ -167,9 +188,39 @@ def _render_section(
         lines.append("")
         lines.append(bold(subject_names.get(subject_id, "?")))
         for item in subject_items:
-            due = format_due_short(item.due_at, group.tz, now)
-            lines.append(f"{numbers[item.id]}. {esc(item.title)} — {esc(due)}")
+            lines.append(f"{numbers[item.id]}. {esc(item.title)} — {_due_short(item, group, now)}")
     return "\n".join(lines)
+
+
+def _due_short(item: Item, group: Group, now: datetime) -> str:
+    """Короткий дедлайн записи: местное время читателя либо метка открытой задачи."""
+    if item.due_at is None:
+        return esc(OPEN_DUE_LABEL)
+    return time_tag(format_due_short(item.due_at, group.tz, now), item.due_at)
+
+
+def _due_full(due_at: datetime | None, group: Group, now: datetime) -> str:
+    """Полный дедлайн с относительным сроком; оба — в локали читателя."""
+    if due_at is None:
+        return esc(OPEN_DUE_LABEL)
+    absolute = time_tag(format_due_short(due_at, group.tz, now), due_at, TIME_FULL)
+    relative = time_tag(humanize_delta(ensure_utc(due_at) - now), due_at, TIME_RELATIVE)
+    return f"{absolute} ({relative})"
+
+
+def _description_block(description: str) -> str:
+    """Описание цитатой; длинное — сворачиваемой."""
+    if len(description) > LONG_DESCRIPTION:
+        return expandable_quote(description)
+    return quote(description)
+
+
+def _links_block(links: list[str]) -> str:
+    """Ссылки списком; если их много — сворачиваемой цитатой."""
+    body = "\n".join(link(url, url) for url in links)
+    if len(links) > MANY_LINKS:
+        return raw_expandable_quote(body)
+    return body
 
 
 def _reminder_summary(item_offsets: list[int] | None, muted: bool, resolved: list[int]) -> str:

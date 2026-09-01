@@ -1,6 +1,7 @@
 from datetime import date, time
 
 from aiogram.types import (
+    DisabledButton,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
@@ -27,7 +28,6 @@ from src.domain.humanize import WEEKDAYS_RU
 from src.domain.models import Group, Item, Member, Subject
 from src.domain.reminders import OFFSET_PRESETS
 from src.ui.callbacks import (
-    NOOP,
     AddStep,
     AdminAction,
     CalendarNav,
@@ -205,32 +205,28 @@ def calendar_keyboard(
     next_year, next_month = shift_month(year, month, 1)
     builder.row(
         InlineKeyboardButton(
-            text="‹" if can_go_back(year, month, today) else " ",
-            callback_data=(
-                CalendarNav(action="nav", year=prev_year, month=prev_month).pack()
-                if can_go_back(year, month, today)
-                else NOOP
-            ),
-        ),
-        InlineKeyboardButton(text=month_title(year, month), callback_data=NOOP),
+            text="‹",
+            callback_data=CalendarNav(action="nav", year=prev_year, month=prev_month).pack(),
+        )
+        if can_go_back(year, month, today)
+        else _disabled("‹"),
+        _disabled(month_title(year, month)),
         InlineKeyboardButton(
-            text="›" if can_go_forward(year, month, today) else " ",
-            callback_data=(
-                CalendarNav(action="nav", year=next_year, month=next_month).pack()
-                if can_go_forward(year, month, today)
-                else NOOP
-            ),
-        ),
+            text="›",
+            callback_data=CalendarNav(action="nav", year=next_year, month=next_month).pack(),
+        )
+        if can_go_forward(year, month, today)
+        else _disabled("›"),
     )
-    builder.row(*(InlineKeyboardButton(text=day, callback_data=NOOP) for day in WEEKDAYS_RU))
+    builder.row(*(_disabled(day) for day in WEEKDAYS_RU))
 
     for week in month_grid(year, month):
         buttons = []
         for cell in week:
             if cell is None:
-                buttons.append(InlineKeyboardButton(text=" ", callback_data=NOOP))
+                buttons.append(_disabled(" "))
             elif not is_selectable(cell, today):
-                buttons.append(InlineKeyboardButton(text="·", callback_data=NOOP))
+                buttons.append(_disabled(str(cell.day)))
             else:
                 label = f"·{cell.day}·" if cell == today else str(cell.day)
                 buttons.append(
@@ -361,7 +357,7 @@ def subjects_manage_keyboard(subjects: list[Subject]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for subject in subjects:
         builder.row(
-            InlineKeyboardButton(text=_clip(subject.name), callback_data=NOOP),
+            _disabled(_clip(subject.name)),
             InlineKeyboardButton(
                 text="🗑",
                 callback_data=SubjectAction(action="del", subject_id=subject.id).pack(),
@@ -540,6 +536,11 @@ def back_keyboard(to: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(_nav(to, BACK))
     return builder.as_markup()
+
+
+def _disabled(text: str) -> InlineKeyboardButton:
+    """Неактивная кнопка: Telegram сам гасит её и не шлёт callback."""
+    return InlineKeyboardButton(text=text, disabled=DisabledButton())
 
 
 def _hhmm(moment: time) -> str:

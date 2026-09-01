@@ -210,3 +210,90 @@ class TestSplitMessages:
 
     def test_empty_blocks_skipped(self):
         assert split_messages(["", "a", ""]) == ["a"]
+
+
+class TestRichFormatting:
+    def test_deadline_wrapped_in_tg_time(self):
+        item = _item(due_at=NOW + timedelta(days=3))
+        text = render_list(tasks=[item], events=[], subject_names=SUBJECTS, group=GROUP, now=NOW)
+        assert "<tg-time unix=" in text
+        assert 'format="dt"' in text
+
+    def test_tg_time_unix_matches_deadline(self):
+        due = NOW + timedelta(days=3)
+        text = render_card(item=_item(due_at=due), subject_name="Матан", group=GROUP, now=NOW)
+        assert f'unix="{int(due.timestamp())}"' in text
+
+    def test_naive_deadline_treated_as_utc_in_tag(self):
+        aware = NOW + timedelta(days=3)
+        naive = aware.replace(tzinfo=None)
+        aware_text = render_card(item=_item(due_at=aware), subject_name="М", group=GROUP, now=NOW)
+        naive_text = render_card(item=_item(due_at=naive), subject_name="М", group=GROUP, now=NOW)
+        assert f'unix="{int(aware.timestamp())}"' in naive_text
+        assert aware_text.count("<tg-time") == naive_text.count("<tg-time")
+
+    def test_card_uses_relative_and_absolute_tags(self):
+        text = render_card(
+            item=_item(due_at=NOW + timedelta(days=3)), subject_name="М", group=GROUP, now=NOW
+        )
+        assert 'format="wDt"' in text
+        assert 'format="r"' in text
+        assert "через 3 дня" in text
+
+    def test_open_task_has_no_time_tag(self):
+        text = render_card(item=_item(due_at=None), subject_name="М", group=GROUP, now=NOW)
+        assert "<tg-time" not in text
+        assert "до конца модуля" in text
+
+    def test_short_description_is_plain_quote(self):
+        text = render_card(
+            item=_item(description="Коротко"), subject_name="М", group=GROUP, now=NOW
+        )
+        assert "<blockquote>Коротко</blockquote>" in text
+
+    def test_long_description_is_expandable(self):
+        text = render_card(
+            item=_item(description="я" * 250), subject_name="М", group=GROUP, now=NOW
+        )
+        assert "<blockquote expandable>" in text
+
+    def test_description_is_escaped_inside_quote(self):
+        text = render_card(
+            item=_item(description="<b>не разметка</b>"), subject_name="М", group=GROUP, now=NOW
+        )
+        assert "&lt;b&gt;не разметка&lt;/b&gt;" in text
+
+    def test_few_links_stay_plain(self):
+        text = render_card(
+            item=_item(links=["https://a.test", "https://b.test"]),
+            subject_name="М",
+            group=GROUP,
+            now=NOW,
+        )
+        assert "<blockquote" not in text
+
+    def test_many_links_collapse(self):
+        links = [f"https://link{i}.test" for i in range(5)]
+        text = render_card(item=_item(links=links), subject_name="М", group=GROUP, now=NOW)
+        assert "<blockquote expandable>" in text
+        assert text.count("<a href=") == 5
+
+    def test_passed_screen_is_expandable_quote(self):
+        items = [_item(due_at=NOW - timedelta(days=1))]
+        text = render_passed(items=items, subject_names=SUBJECTS, group=GROUP, now=NOW)
+        assert "<blockquote expandable>" in text
+
+    def test_digest_time_is_localized(self):
+        items = [_item(id=1, due_at=datetime(2026, 6, 20, 20, 59, tzinfo=UTC))]
+        blocks = render_digest(
+            items=items, subject_names=SUBJECTS, group=GROUP, now=NOW, header="Дайджест"
+        )
+        assert any('format="t"' in b for b in blocks)
+
+    def test_reminder_uses_time_tags(self):
+        item = _item(due_at=NOW + timedelta(days=1))
+        text = render_reminder(
+            item=item, subject_name="М", group=GROUP, offset_minutes=1440, now=NOW
+        )
+        assert 'format="wDt"' in text
+        assert 'format="r"' in text

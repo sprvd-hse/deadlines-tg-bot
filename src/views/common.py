@@ -1,5 +1,8 @@
 from collections.abc import Iterable
+from datetime import datetime
 from html import escape
+
+from src.domain.humanize import ensure_utc
 
 TELEGRAM_LIMIT = 4096
 SAFE_LIMIT = 3900
@@ -23,6 +26,37 @@ def italic(text: str) -> str:
 def code(text: str) -> str:
     """Моноширинный текст с click-to-copy (вход экранируется)."""
     return f"<code>{esc(text)}</code>"
+
+
+# Формат entity date_time: r | w?[dD]?[tT]?
+# r — относительное время, w — день недели, d/D — короткая/длинная дата,
+# t/T — короткое/длинное время. Клиент показывает момент в поясе читателя,
+# а старые клиенты — текст внутри тега как есть.
+TIME_SHORT = "dt"
+TIME_FULL = "wDt"
+TIME_ONLY = "t"
+TIME_RELATIVE = "r"
+
+
+def time_tag(text: str, moment: datetime, fmt: str = TIME_SHORT) -> str:
+    """Оборачивает момент в <tg-time>, чтобы читатель видел своё местное время."""
+    unix = int(ensure_utc(moment).timestamp())
+    return f'<tg-time unix="{unix}" format="{fmt}">{esc(text)}</tg-time>'
+
+
+def quote(text: str) -> str:
+    """Цитата (вход экранируется)."""
+    return f"<blockquote>{esc(text)}</blockquote>"
+
+
+def expandable_quote(text: str) -> str:
+    """Сворачиваемая цитата (вход экранируется)."""
+    return f"<blockquote expandable>{esc(text)}</blockquote>"
+
+
+def raw_expandable_quote(html: str) -> str:
+    """Сворачиваемая цитата вокруг уже готовой разметки."""
+    return f"<blockquote expandable>{html}</blockquote>"
 
 
 def link(url: str, title: str) -> str:
