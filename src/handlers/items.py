@@ -11,7 +11,7 @@ from src.domain.calendar import TimeParseError, combine_to_utc, parse_time, toda
 from src.domain.enums import ItemKind
 from src.domain.models import DESCRIPTION_MAX, TITLE_MAX, Group, Item, ItemDraft, ItemPatch
 from src.domain.reminders import resolve_offsets
-from src.handlers.ui import Event, notify, show, with_group
+from src.handlers.ui import Event, notify, show, show_rich, with_group
 from src.scheduler import cancel_item, schedule_item
 from src.services.digest import DEFAULT_HORIZON_DAYS, DigestService
 from src.services.groups import ActiveContext, GroupManager
@@ -57,14 +57,45 @@ async def render_tasks(event: Event) -> None:
         return
     now = datetime.now(tz=UTC)
     async with SessionLocal() as session:
-        board = await ItemManager(session).board(ctx.group, now=now)
+        board = await ItemManager(session).board(ctx.group, user_id=ctx.user.id, now=now)
     tasks = item_views.group_by_subject_order(board.tasks, board.subject_names)
     events = item_views.group_by_subject_order(board.events, board.subject_names)
-    text = item_views.render_list(
-        tasks=tasks, events=events, subject_names=board.subject_names, group=ctx.group, now=now
-    )
     numbers = item_views.item_number_map(tasks, events)
-    await show(event, text, kb.list_keyboard(tasks=tasks, events=events, numbers=numbers))
+    markup = kb.list_keyboard(
+        tasks=tasks, events=events, numbers=numbers, completed_ids=board.completed_ids
+    )
+    if board.is_empty:
+        await show(
+            event,
+            item_views.render_list(
+                tasks=tasks,
+                events=events,
+                subject_names=board.subject_names,
+                group=ctx.group,
+                now=now,
+            ),
+            markup,
+        )
+        return
+    await show_rich(
+        event,
+        item_views.render_list_rich(
+            tasks=tasks,
+            events=events,
+            subject_names=board.subject_names,
+            completed_ids=board.completed_ids,
+            group=ctx.group,
+            now=now,
+        ),
+        item_views.render_list(
+            tasks=tasks,
+            events=events,
+            subject_names=board.subject_names,
+            group=ctx.group,
+            now=now,
+        ),
+        markup,
+    )
 
 
 @router.callback_query(Nav.filter(F.to == "passed"))
@@ -119,6 +150,22 @@ async def open_card(callback: CallbackQuery, callback_data: ItemAction, state: F
     await state.clear()
     await callback.answer()
     await _render_card(callback, callback_data.item_id)
+
+
+@router.callback_query(ItemAction.filter(F.action.in_({"toggle", "togglecard"})))
+async def toggle_completion(callback: CallbackQuery, callback_data: ItemAction) -> None:
+    """Переключает личную отметку «выполнено» и перерисовывает исходный экран."""
+    loaded = await _load_item(callback, callback_data.item_id)
+    if loaded is None:
+        return
+    item, ctx = loaded
+    async with SessionLocal() as session, session.begin():
+        done = await ItemManager(session).toggle_completion(item_id=item.id, user_id=ctx.user.id)
+    await callback.answer(t.ITEM_DONE if done else t.ITEM_UNDONE)
+    if callback_data.action == "togglecard":
+        await _render_card(callback, item.id)
+        return
+    await render_tasks(callback)
 
 
 @router.callback_query(ItemAction.filter(F.action == "del"))
@@ -772,6 +819,7 @@ async def _render_card(event: Event, item_id: int) -> None:
         manager = ItemManager(session)
         subject_names = await manager.subject_names(item.group_id)
         can_modify = await manager.can_modify(item=item, user_id=ctx.user.id)
+        completed = await manager.is_completed(item_id=item.id, user_id=ctx.user.id)
     await show(
         event,
         item_views.render_card(
@@ -779,8 +827,9 @@ async def _render_card(event: Event, item_id: int) -> None:
             subject_name=subject_names.get(item.subject_id, "?"),
             group=ctx.group,
             now=datetime.now(tz=UTC),
+            completed=completed,
         ),
-        kb.card_keyboard(item, can_modify=can_modify),
+        kb.card_keyboard(item, can_modify=can_modify, completed=completed),
     )
 
 

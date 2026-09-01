@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.db.repositories.completions import CompletionRepository
 from src.db.repositories.groups import GroupRepository
 from src.db.repositories.items import ItemRepository
 from src.db.repositories.subjects import SubjectRepository
@@ -24,6 +25,7 @@ class ItemBoard:
     tasks: list[Item]
     events: list[Item]
     subject_names: dict[int, str]
+    completed_ids: frozenset[int] = frozenset()
 
     @property
     def is_empty(self) -> bool:
@@ -39,6 +41,7 @@ class ItemManager:
         self._items = ItemRepository(session)
         self._subjects = SubjectRepository(session)
         self._groups = GroupRepository(session)
+        self._completions = CompletionRepository(session)
 
     async def create(self, *, group_id: int, author_id: int, draft: ItemDraft) -> Item:
         """Создаёт запись, подбирая свободный короткий номер при гонке."""
@@ -78,19 +81,41 @@ class ItemManager:
         await self._items.deactivate(item_id)
         return await self._items.get(item_id)
 
-    async def board(self, group: Group, *, now: datetime | None = None) -> ItemBoard:
-        """Собирает активные задачи и важные даты группы вместе с названиями предметов."""
+    async def board(
+        self, group: Group, *, user_id: int | None = None, now: datetime | None = None
+    ) -> ItemBoard:
+        """Собирает активные записи группы вместе с предметами и личными отметками."""
         moment = now or datetime.now(tz=UTC)
         tasks = await self._items.list_active(group.id, kind=ItemKind.TASK, now=moment)
         events = await self._items.list_active(
             group.id, kind=ItemKind.EVENT, now=moment, include_open=False
         )
+        completed: frozenset[int] = frozenset()
+        if user_id is not None:
+            completed = frozenset(
+                await self._completions.completed_ids(
+                    user_id=user_id, item_ids=[i.id for i in tasks + events]
+                )
+            )
         return ItemBoard(
             group=group,
             tasks=tasks,
             events=events,
             subject_names=await self.subject_names(group.id),
+            completed_ids=completed,
         )
+
+    async def is_completed(self, *, item_id: int, user_id: int) -> bool:
+        """Отмечена ли запись выполненной этим участником."""
+        return await self._completions.is_completed(user_id=user_id, item_id=item_id)
+
+    async def toggle_completion(self, *, item_id: int, user_id: int) -> bool:
+        """Переключает личную отметку и возвращает её новое значение."""
+        if await self._completions.is_completed(user_id=user_id, item_id=item_id):
+            await self._completions.unmark(user_id=user_id, item_id=item_id)
+            return False
+        await self._completions.mark(user_id=user_id, item_id=item_id)
+        return True
 
     async def passed(
         self, group_id: int, *, now: datetime | None = None, limit: int = 30

@@ -59,6 +59,48 @@ def render_list(
     return body or EMPTY_LIST
 
 
+def render_list_rich(
+    *,
+    tasks: list[Item],
+    events: list[Item],
+    subject_names: dict[int, str],
+    completed_ids: frozenset[int],
+    group: Group,
+    now: datetime,
+) -> str:
+    """Список в разметке Rich HTML: чек-боксы, заголовки секций и предметов.
+
+    Галочка нарисована, но не нажимается — Telegram не шлёт о ней событий,
+    поэтому переключают её кнопки под сообщением.
+    """
+    numbers = item_number_map(tasks, events)
+    parts: list[str] = []
+    for header, section_items in (
+        (LIST_HEADER_TASKS, tasks),
+        (LIST_HEADER_EVENTS, events),
+    ):
+        if not section_items:
+            continue
+        parts.append(f"<h3>{esc(header)}</h3>")
+        by_subject: dict[int, list[Item]] = {}
+        for item in section_items:
+            by_subject.setdefault(item.subject_id, []).append(item)
+        for subject_id, subject_items in by_subject.items():
+            parts.append(f"<p><b>{esc(subject_names.get(subject_id, '?'))}</b></p>")
+            rows = []
+            for item in subject_items:
+                checked = " checked" if item.id in completed_ids else ""
+                title = esc(item.title)
+                if item.id in completed_ids:
+                    title = f"<s>{title}</s>"
+                rows.append(
+                    f'<li><input type="checkbox"{checked}>'
+                    f"{numbers[item.id]}. {title} — {_due_short(item, group, now)}</li>"
+                )
+            parts.append(f"<ul>{''.join(rows)}</ul>")
+    return "".join(parts) or f"<p>{esc(EMPTY_LIST)}</p>"
+
+
 def render_passed(
     *, items: list[Item], subject_names: dict[int, str], group: Group, now: datetime
 ) -> str:
@@ -75,10 +117,18 @@ def render_passed(
     return f"{bold('🗄 Прошедшие')}\n{raw_expandable_quote(chr(10).join(lines))}"
 
 
-def render_card(*, item: Item, subject_name: str, group: Group, now: datetime) -> str:
+def render_card(
+    *,
+    item: Item,
+    subject_name: str,
+    group: Group,
+    now: datetime,
+    completed: bool = False,
+) -> str:
     """Карточка записи со всеми подробностями."""
+    mark = "✅ " if completed else ""
     head = (
-        f"{KIND_ICONS[item.kind]} {bold(item.title)}\n"
+        f"{KIND_ICONS[item.kind]} {mark}{bold(item.title)}\n"
         f"{esc(category_label(item.kind, item.category))} · {italic(subject_name)}"
     )
     blocks = [head, f"🕒 {_due_full(item.due_at, group, now)}"]

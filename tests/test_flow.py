@@ -424,3 +424,57 @@ class TestChatBinding:
     async def test_bot_offers_binding_when_added(self, app):
         await app.chat_added()
         assert "привязать этот чат" in app.last_text
+
+
+class TestChecklist:
+    async def test_list_renders_checkboxes(self, app):
+        await _seed_one_task(app, "Лабораторная 4")
+        await app.send("📋 Задания")
+        assert '<input type="checkbox">' in app.last_text
+        assert "Лабораторная 4" in app.last_text
+
+    async def test_toggle_from_list_checks_the_box(self, app):
+        await _seed_one_task(app, "Лабораторная 4")
+        await app.send("📋 Задания")
+        await app.tap("☐")
+        assert '<input type="checkbox" checked>' in app.last_text
+        assert "<s>Лабораторная 4</s>" in app.last_text
+
+    async def test_toggle_twice_returns_to_unchecked(self, app):
+        await _seed_one_task(app, "Лабораторная 4")
+        await app.send("📋 Задания")
+        await app.tap("☐")
+        await app.tap("✅")
+        assert '<input type="checkbox">' in app.last_text
+        assert "<s>" not in app.last_text
+
+    async def test_card_shows_and_toggles_completion(self, app):
+        await _seed_one_task(app, "Лабораторная 4")
+        await app.send("📋 Задания")
+        await app.tap("Лабораторная 4")
+        assert "✅ Выполнено" in [
+            b["text"] if isinstance(b, dict) else b.text for b in app.buttons()
+        ]
+        await app.tap("✅ Выполнено")
+        assert "✅ <b>Лабораторная 4</b>" in app.last_text
+        labels = [b["text"] if isinstance(b, dict) else b.text for b in app.buttons()]
+        assert "↩️ Вернуть в работу" in labels
+
+    async def test_completion_is_personal(self, app):
+        await _seed_one_task(app, "Лабораторная 4")
+        await app.send("👥 Группа")
+        code = app.last_text.split("?start=join-")[1].split()[0]
+        await app.send("📋 Задания")
+        await app.tap("☐")
+        assert '<input type="checkbox" checked>' in app.last_text
+
+        other = _second_user()
+        await other.send(f"/start join-{code}")
+        await other.send("📋 Задания")
+        assert '<input type="checkbox">' in other.last_text
+        assert "<s>" not in other.last_text
+
+    async def test_empty_list_stays_plain(self, app):
+        await _bootstrap_group(app)
+        await app.send("📋 Задания")
+        assert "Пока пусто" in app.last_text

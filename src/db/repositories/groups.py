@@ -205,6 +205,9 @@ class GroupRepository:
             await self._session.execute(
                 delete(orm.ReminderLog).where(orm.ReminderLog.item_id.in_(item_ids))
             )
+            await self._session.execute(
+                delete(orm.ItemCompletion).where(orm.ItemCompletion.item_id.in_(item_ids))
+            )
         await self._session.execute(delete(orm.Item).where(orm.Item.group_id == group_id))
         await self._session.execute(delete(orm.Subject).where(orm.Subject.group_id == group_id))
         await self._session.execute(

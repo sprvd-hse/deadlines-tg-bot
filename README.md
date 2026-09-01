@@ -20,6 +20,8 @@ Telegram-бот для общего списка дедлайнов учебно
 - Inline-режим: `@бот` в любом чате вставляет ближайшие дедлайны
 - Дайджест закрепляется в чате, предыдущий закреп снимается
 - Бот сам предлагает привязать чат, когда его туда добавили
+- Личный чек-лист: список приходит rich-сообщением с галочками, отметка видна
+  только тебе и снимает напоминания по этой записи
 - Дедлайны показываются в часовом поясе читателя (entity `date_time`)
 - Длинные описания, ссылки и блок прошедших — сворачиваемыми цитатами
 - Reply-клавиатура для разделов, всё остальное — инлайн-кнопками
@@ -68,7 +70,7 @@ src/
     models.py           — таблицы: groups, users, group_members, subjects,
                           items, reminder_log
     session.py          — async engine, sessionmaker, sqlite WAL/foreign_keys
-    repositories/       — users, groups, subjects, items, reminders
+    repositories/       — users, groups, subjects, items, reminders, completions
   services/
     groups.py           — GroupManager: группы, участники, предметы
     items.py            — ItemManager: CRUD записей, сборка списка

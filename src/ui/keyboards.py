@@ -68,16 +68,26 @@ def _nav(to: str, text: str) -> InlineKeyboardButton:
 
 
 def list_keyboard(
-    *, tasks: list[Item], events: list[Item], numbers: dict[int, int]
+    *,
+    tasks: list[Item],
+    events: list[Item],
+    numbers: dict[int, int],
+    completed_ids: frozenset[int] = frozenset(),
 ) -> InlineKeyboardMarkup:
-    """Кнопки открытия карточек активных записей плюс переходы."""
+    """По кнопке-переключателю и кнопке открытия карточки на каждую запись."""
     builder = InlineKeyboardBuilder()
     for item in tasks + events:
+        done = item.id in completed_ids
         label = f"{numbers[item.id]}. {KIND_ICONS[item.kind]} {item.title}"
         builder.row(
             InlineKeyboardButton(
-                text=_clip(label), callback_data=ItemAction(action="open", item_id=item.id).pack()
-            )
+                text="✅" if done else "☐",
+                callback_data=ItemAction(action="toggle", item_id=item.id).pack(),
+            ),
+            InlineKeyboardButton(
+                text=_clip(label, 50),
+                callback_data=ItemAction(action="open", item_id=item.id).pack(),
+            ),
         )
     builder.row(_nav("passed", "🗄 Прошедшие"), _nav("digest", "📅 Ближайшие"))
     return builder.as_markup()
@@ -97,9 +107,15 @@ def passed_keyboard(items: list[Item]) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def card_keyboard(item: Item, *, can_modify: bool) -> InlineKeyboardMarkup:
+def card_keyboard(item: Item, *, can_modify: bool, completed: bool = False) -> InlineKeyboardMarkup:
     """Кнопки карточки записи."""
     builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="↩️ Вернуть в работу" if completed else "✅ Выполнено",
+            callback_data=ItemAction(action="togglecard", item_id=item.id).pack(),
+        )
+    )
     if can_modify:
         builder.row(
             InlineKeyboardButton(

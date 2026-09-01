@@ -138,6 +138,24 @@ class Item(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
 
+class ItemCompletion(Base):
+    """Личная отметка «выполнено»: видна только самому участнику."""
+
+    __tablename__ = "item_completions"
+    __table_args__ = (UniqueConstraint("item_id", "user_id", name="uq_item_completions_item_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class ReminderLog(Base):
     __tablename__ = "reminder_log"
     __table_args__ = (

@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 from aiogram.types import LinkPreviewOptions
 
+from src.db.repositories.completions import CompletionRepository
 from src.db.repositories.groups import GroupRepository
 from src.db.repositories.items import ItemRepository
 from src.db.repositories.reminders import ReminderLogRepository
@@ -107,10 +108,12 @@ class ReminderService:
             already = await ReminderLogRepository(session).sent_user_ids(
                 item_id=item_id, offset_minutes=offset_minutes
             )
+            done = await CompletionRepository(session).users_who_completed(item_id)
+            skip = already | done
             recipients = [
                 (m.user.id, m.user.tg_user_id)
                 for m in await groups.list_members(group.id)
-                if m.personal_reminders_enabled and m.user.id not in already
+                if m.personal_reminders_enabled and m.user.id not in skip
             ]
             text = render_reminder(
                 item=item,

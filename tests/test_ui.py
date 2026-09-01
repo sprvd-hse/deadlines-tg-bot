@@ -146,7 +146,13 @@ class TestOffsetsKeyboard:
 class TestItemKeyboards:
     def test_card_hides_actions_without_rights(self):
         labels = [b.text for b in _buttons(kb.card_keyboard(_item(), can_modify=False))]
-        assert labels == ["📋 К списку"]
+        assert labels == ["✅ Выполнено", "📋 К списку"]
+
+    def test_card_toggle_label_reflects_state(self):
+        labels = [
+            b.text for b in _buttons(kb.card_keyboard(_item(), can_modify=False, completed=True))
+        ]
+        assert "↩️ Вернуть в работу" in labels
 
     def test_close_button_only_for_open_task(self):
         with_deadline = _item(due_at=None)
@@ -157,8 +163,14 @@ class TestItemKeyboards:
         tasks = [_item(id=1, title="A"), _item(id=2, title="B")]
         markup = kb.list_keyboard(tasks=tasks, events=[], numbers={1: 1, 2: 2})
         labels = [b.text for b in _buttons(markup)]
-        assert labels[0].startswith("1.")
-        assert labels[1].startswith("2.")
+        assert labels[:4] == ["☐", "1. 📝 A", "☐", "2. 📝 B"]
+
+    def test_completed_item_shows_check(self):
+        tasks = [_item(id=1, title="A")]
+        markup = kb.list_keyboard(
+            tasks=tasks, events=[], numbers={1: 1}, completed_ids=frozenset({1})
+        )
+        assert _buttons(markup)[0].text == "✅"
 
     def test_kind_keyboard_offers_both_types(self):
         values = [

@@ -29,6 +29,14 @@ class FakeSession(BaseSession):
         name = type(method).__name__
         payload = method.model_dump(exclude_none=True)
         self.calls.append((name, payload))
+        if name == "SendRichMessage":
+            self._message_id += 1
+            return Message(
+                message_id=self._message_id,
+                date=dt.datetime.now(tz=dt.UTC),
+                chat=Chat(id=payload.get("chat_id", CHAT_ID), type="private"),
+                text=_rich_html(payload),
+            )
         if name in {"SendMessage", "EditMessageText"}:
             self._message_id += 1
             return Message(
@@ -46,11 +54,11 @@ class FakeSession(BaseSession):
 
     @property
     def texts(self) -> list[str]:
-        """Тексты всех отправленных и отредактированных сообщений."""
+        """Тексты всех показанных экранов, включая rich-сообщения."""
         return [
-            payload.get("text", "")
+            payload.get("text") or _rich_html(payload)
             for name, payload in self.calls
-            if name in {"SendMessage", "EditMessageText"}
+            if name in {"SendMessage", "EditMessageText", "SendRichMessage"}
         ]
 
     @property
@@ -62,7 +70,9 @@ class FakeSession(BaseSession):
     def last_markup(self) -> Any:
         """Клавиатура последнего экрана."""
         for name, payload in reversed(self.calls):
-            if name in {"SendMessage", "EditMessageText"} and payload.get("reply_markup"):
+            if name in {"SendMessage", "EditMessageText", "SendRichMessage"} and payload.get(
+                "reply_markup"
+            ):
                 return payload["reply_markup"]
         return None
 
@@ -93,6 +103,14 @@ class FakeSession(BaseSession):
     def clear(self) -> None:
         """Сбрасывает историю вызовов."""
         self.calls.clear()
+
+
+def _rich_html(payload: dict) -> str:
+    """HTML rich-сообщения из полезной нагрузки метода."""
+    rich = payload.get("rich_message")
+    if not rich:
+        return ""
+    return rich.get("html", "") if isinstance(rich, dict) else (rich.html or "")
 
 
 def make_bot() -> tuple[Bot, FakeSession]:

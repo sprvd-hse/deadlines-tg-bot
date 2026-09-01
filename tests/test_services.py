@@ -550,3 +550,88 @@ class TestDigestService:
             refreshed = await GroupManager(session).get_group(group.id)
         assert refreshed.digest_last_sent_at is not None
         assert not is_digest_due(refreshed, NOW)
+
+
+class TestCompletions:
+    async def _seed_item(self, session):
+        user, group, subject = await _seed(session)
+        item = await ItemManager(session).create(
+            group_id=group.id,
+            author_id=user.id,
+            draft=ItemDraft(
+                kind=ItemKind.TASK,
+                subject_id=subject.id,
+                category=TaskCategory.LAB,
+                title="Лаба",
+                due_at=NOW + timedelta(days=2),
+            ),
+        )
+        return user, group, item
+
+    async def test_toggle_switches_state(self, session):
+        user, _, item = await self._seed_item(session)
+        manager = ItemManager(session)
+        assert not await manager.is_completed(item_id=item.id, user_id=user.id)
+        assert await manager.toggle_completion(item_id=item.id, user_id=user.id)
+        assert await manager.is_completed(item_id=item.id, user_id=user.id)
+        assert not await manager.toggle_completion(item_id=item.id, user_id=user.id)
+
+    async def test_board_reports_completed_ids(self, session):
+        user, group, item = await self._seed_item(session)
+        manager = ItemManager(session)
+        await manager.toggle_completion(item_id=item.id, user_id=user.id)
+        board = await manager.board(group, user_id=user.id, now=NOW)
+        assert board.completed_ids == frozenset({item.id})
+
+    async def test_completion_is_personal(self, session):
+        user, group, item = await self._seed_item(session)
+        groups = GroupManager(session)
+        other = await groups._users.get_or_create(tg_user_id=2, tg_username=None, full_name="Б")
+        await groups.join_group(user=other, invite_code=group.invite_code)
+        manager = ItemManager(session)
+        await manager.toggle_completion(item_id=item.id, user_id=user.id)
+        board = await manager.board(group, user_id=other.id, now=NOW)
+        assert board.completed_ids == frozenset()
+
+    async def test_board_without_user_has_no_marks(self, session):
+        user, group, item = await self._seed_item(session)
+        manager = ItemManager(session)
+        await manager.toggle_completion(item_id=item.id, user_id=user.id)
+        board = await manager.board(group, now=NOW)
+        assert board.completed_ids == frozenset()
+
+    async def test_completed_user_gets_no_reminder(self, factory):
+        async with factory() as session:
+            user, _, item = await self._seed_item(session)
+            await ItemManager(session).toggle_completion(item_id=item.id, user_id=user.id)
+            await session.commit()
+        bot = FakeBot()
+        sent = await ReminderService(factory, bot).send_batch(
+            item_id=item.id, offset_minutes=1440, now=NOW
+        )
+        assert sent == 0
+        assert bot.sent == []
+
+    async def test_other_members_still_get_reminder(self, factory):
+        async with factory() as session:
+            user, group, item = await self._seed_item(session)
+            groups = GroupManager(session)
+            other = await groups._users.get_or_create(tg_user_id=2, tg_username=None, full_name="Б")
+            await groups.join_group(user=other, invite_code=group.invite_code)
+            await ItemManager(session).toggle_completion(item_id=item.id, user_id=user.id)
+            await session.commit()
+        bot = FakeBot()
+        sent = await ReminderService(factory, bot).send_batch(
+            item_id=item.id, offset_minutes=1440, now=NOW
+        )
+        assert sent == 1
+        assert bot.sent[0][0] == other.tg_user_id
+
+    async def test_deleting_group_removes_completions(self, session):
+        user, group, item = await self._seed_item(session)
+        manager = ItemManager(session)
+        await manager.toggle_completion(item_id=item.id, user_id=user.id)
+        await GroupManager(session).delete_group(group.id)
+        from src.db.repositories.completions import CompletionRepository
+
+        assert await CompletionRepository(session).users_who_completed(item.id) == set()
