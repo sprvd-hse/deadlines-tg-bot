@@ -10,7 +10,7 @@ from aiogram.types import (
 )
 
 from src.config import settings
-from src.handlers import chat, groupctl, items, menu, reply, subjects
+from src.handlers import chat, groupctl, inline, items, menu, reply, subjects
 from src.handlers import settings as settings_handlers
 from src.scheduler import shutdown_scheduler, start_scheduler
 
@@ -36,6 +36,7 @@ async def main() -> None:
         groupctl.router,
         settings_handlers.router,
         chat.router,
+        inline.router,
     ):
         dp.include_router(router)
 

@@ -16,6 +16,7 @@ class FakeSession(BaseSession):
     def __init__(self) -> None:
         super().__init__()
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.inline_results: list[Any] = []
         self._message_id = 1000
 
     async def close(self) -> None:
@@ -36,6 +37,9 @@ class FakeSession(BaseSession):
                 chat=Chat(id=payload.get("chat_id", CHAT_ID), type="private"),
                 text=payload.get("text", ""),
             )
+        if name == "AnswerInlineQuery":
+            self.inline_results = payload.get("results", [])
+            return True
         if name == "GetMe":
             return User(id=1, is_bot=True, first_name="bot", username="testbot")
         return True
@@ -97,15 +101,17 @@ def make_bot() -> tuple[Bot, FakeSession]:
     return Bot(token="42:testtoken", session=session), session
 
 
-def message_update(text: str, *, update_id: int = 1) -> Update:
+def message_update(
+    text: str, *, update_id: int = 1, user_id: int = USER_ID, chat_id: int = CHAT_ID
+) -> Update:
     """Апдейт с текстовым сообщением от пользователя."""
     return Update(
         update_id=update_id,
         message=Message(
             message_id=update_id,
             date=dt.datetime.now(tz=dt.UTC),
-            chat=Chat(id=CHAT_ID, type="private"),
-            from_user=User(id=USER_ID, is_bot=False, first_name="Аня", username="anya"),
+            chat=Chat(id=chat_id, type="private"),
+            from_user=User(id=user_id, is_bot=False, first_name="Боря", username="borya"),
             text=text,
         ),
     )
@@ -128,5 +134,37 @@ def callback_update(data: str, *, update_id: int = 1) -> Update:
                 chat=Chat(id=CHAT_ID, type="private"),
                 text="экран",
             ),
+        ),
+    )
+
+
+def inline_update(query: str, *, update_id: int = 1) -> Update:
+    """Апдейт с inline-запросом."""
+    from aiogram.types import InlineQuery
+
+    return Update(
+        update_id=update_id,
+        inline_query=InlineQuery(
+            id=str(update_id),
+            from_user=User(id=USER_ID, is_bot=False, first_name="Аня", username="anya"),
+            query=query,
+            offset="",
+        ),
+    )
+
+
+def added_to_chat_update(chat_id: int = -100500, *, update_id: int = 1) -> Update:
+    """Апдейт о добавлении бота в групповой чат."""
+    from aiogram.types import ChatMemberLeft, ChatMemberMember, ChatMemberUpdated
+
+    bot_user = User(id=1, is_bot=True, first_name="bot", username="testbot")
+    return Update(
+        update_id=update_id,
+        my_chat_member=ChatMemberUpdated(
+            chat=Chat(id=chat_id, type="supergroup"),
+            from_user=User(id=USER_ID, is_bot=False, first_name="Аня"),
+            date=dt.datetime.now(tz=dt.UTC),
+            old_chat_member=ChatMemberLeft(user=bot_user),
+            new_chat_member=ChatMemberMember(user=bot_user),
         ),
     )

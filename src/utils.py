@@ -30,6 +30,21 @@ def normalize_invite_code(raw: str) -> str | None:
     )
 
 
+JOIN_PAYLOAD_PREFIX = "join-"
+
+
+def build_invite_link(bot_username: str, invite_code: str) -> str:
+    """Собирает deep-link, по которому пользователь входит в группу одним тапом."""
+    return f"https://t.me/{bot_username}?start={JOIN_PAYLOAD_PREFIX}{invite_code}"
+
+
+def invite_code_from_payload(payload: str) -> str | None:
+    """Извлекает invite-код из payload команды /start, если он там есть."""
+    if not payload.startswith(JOIN_PAYLOAD_PREFIX):
+        return None
+    return normalize_invite_code(payload[len(JOIN_PAYLOAD_PREFIX) :])
+
+
 _LINK_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
 

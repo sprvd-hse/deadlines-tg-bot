@@ -1,6 +1,6 @@
 import logging
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -12,7 +12,7 @@ from src.services.groups import GroupManager, check_join_rate_limit
 from src.states import GroupOnboarding
 from src.ui import keyboards as kb
 from src.ui.callbacks import GroupAction, Nav
-from src.utils import normalize_invite_code
+from src.utils import build_invite_link, invite_code_from_payload, normalize_invite_code
 from src.views import texts as t
 
 logger = logging.getLogger(__name__)
@@ -23,15 +23,15 @@ router.message.filter(F.chat.type == "private")
 
 @router.callback_query(Nav.filter(F.to == "group"))
 @router.callback_query(GroupAction.filter(F.action == "back"))
-async def open_group(event: Event, state: FSMContext, *args, **kwargs) -> None:
+async def open_group(event: Event, state: FSMContext, bot: Bot, *args, **kwargs) -> None:
     """Экран группы."""
     await state.clear()
     if isinstance(event, CallbackQuery):
         await event.answer()
-    await render_group(event)
+    await render_group(event, bot)
 
 
-async def render_group(event: Event) -> None:
+async def render_group(event: Event, bot: Bot) -> None:
     """Рисует карточку активной группы."""
     ctx = await load_context(event)
     if ctx is None:
@@ -43,7 +43,10 @@ async def render_group(event: Event) -> None:
         members = await manager.members(active.group.id) if active else []
     text = (
         t.GROUP_HEADER.format(
-            group=active.group.name, members=len(members), code=active.group.invite_code
+            group=active.group.name,
+            members=len(members),
+            code=active.group.invite_code,
+            link=await invite_link(bot, active.group.invite_code),
         )
         if active
         else t.GROUP_NONE
@@ -78,7 +81,7 @@ async def open_switch(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(GroupAction.filter(F.action == "set"))
-async def switch_group(callback: CallbackQuery, callback_data: GroupAction) -> None:
+async def switch_group(callback: CallbackQuery, callback_data: GroupAction, bot: Bot) -> None:
     """Делает выбранную группу активной."""
     ctx = await load_context(callback)
     if ctx is None:
@@ -91,7 +94,7 @@ async def switch_group(callback: CallbackQuery, callback_data: GroupAction) -> N
         await callback.answer(t.GROUP_CODE_NOT_FOUND, show_alert=True)
         return
     await callback.answer(t.GROUP_SWITCHED.format(group=group.name))
-    await render_group(callback)
+    await render_group(callback, bot)
 
 
 @router.callback_query(GroupAction.filter(F.action == "new"))
@@ -103,7 +106,7 @@ async def ask_group_name(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(GroupOnboarding.name, F.text)
-async def create_group(message: Message, state: FSMContext) -> None:
+async def create_group(message: Message, state: FSMContext, bot: Bot) -> None:
     """Создаёт группу."""
     ctx = await load_context(message)
     if ctx is None:
@@ -112,7 +115,8 @@ async def create_group(message: Message, state: FSMContext) -> None:
         group = await GroupManager(session).create_group(creator=ctx.user, name=message.text or "")
     await state.clear()
     await message.answer(
-        t.GROUP_CREATED.format(group=group.name, code=group.invite_code), parse_mode="HTML"
+        t.GROUP_CREATED.format(group=group.name, link=await invite_link(bot, group.invite_code)),
+        parse_mode="HTML",
     )
     await open_home(message)
 
@@ -160,7 +164,7 @@ async def confirm_leave(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(GroupAction.filter(F.action == "leaveyes"))
-async def do_leave(callback: CallbackQuery) -> None:
+async def do_leave(callback: CallbackQuery, bot: Bot) -> None:
     """Выводит пользователя из группы."""
     ctx = await with_group(callback)
     if ctx is None:
@@ -175,7 +179,7 @@ async def do_leave(callback: CallbackQuery) -> None:
     }
     await callback.answer(messages[status], show_alert=status == "need_transfer")
     if status == "need_transfer":
-        await render_group(callback)
+        await render_group(callback, bot)
         return
     await open_home(callback)
 
@@ -200,3 +204,18 @@ async def _join(message: Message, state: FSMContext, raw_code: str) -> None:
     template = t.GROUP_JOINED if status == "ok" else t.GROUP_ALREADY_MEMBER
     await message.answer(template.format(group=group.name), parse_mode="HTML")
     await open_home(message)
+
+
+async def join_by_payload(message: Message, state: FSMContext, payload: str) -> bool:
+    """Пробует войти в группу по payload ссылки-приглашения."""
+    code = invite_code_from_payload(payload)
+    if code is None:
+        return False
+    await _join(message, state, code)
+    return True
+
+
+async def invite_link(bot: Bot, invite_code: str) -> str:
+    """Ссылка-приглашение в группу по её коду."""
+    me = await bot.me()
+    return build_invite_link(me.username or "", invite_code)

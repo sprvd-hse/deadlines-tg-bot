@@ -2,7 +2,7 @@ import logging
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -11,7 +11,7 @@ from src.db.session import SessionLocal
 from src.domain.humanize import WEEKDAYS_RU_FULL
 from src.domain.models import Group
 from src.domain.reminders import offsets_label
-from src.handlers.groupctl import render_group
+from src.handlers.groupctl import invite_link, render_group
 from src.handlers.ui import Event, notify, show, with_group
 from src.scheduler import schedule_item
 from src.services.groups import ActiveContext, GroupManager
@@ -229,7 +229,7 @@ async def save_digest_hour(callback: CallbackQuery, callback_data: AdminAction) 
 
 
 @router.callback_query(AdminAction.filter(F.action == "regen"))
-async def regenerate_code(callback: CallbackQuery) -> None:
+async def regenerate_code(callback: CallbackQuery, bot: Bot) -> None:
     """Перевыпускает invite-код."""
     ctx = await _creator_only(callback)
     if ctx is None:
@@ -237,7 +237,11 @@ async def regenerate_code(callback: CallbackQuery) -> None:
     async with SessionLocal() as session, session.begin():
         code = await GroupManager(session).regenerate_invite_code(ctx.group.id)
     await callback.answer()
-    await show(callback, t.ADMIN_CODE_REGENERATED.format(code=code), kb.back_keyboard("admin"))
+    await show(
+        callback,
+        t.ADMIN_CODE_REGENERATED.format(code=code, link=await invite_link(bot, code)),
+        kb.back_keyboard("admin"),
+    )
 
 
 @router.callback_query(AdminAction.filter(F.action == "transfer"))
@@ -275,7 +279,7 @@ async def confirm_transfer(callback: CallbackQuery, callback_data: MemberAction)
 
 
 @router.callback_query(MemberAction.filter(F.action == "transferyes"))
-async def do_transfer(callback: CallbackQuery, callback_data: MemberAction) -> None:
+async def do_transfer(callback: CallbackQuery, callback_data: MemberAction, bot: Bot) -> None:
     """Передаёт роль создателя."""
     ctx = await _creator_only(callback)
     if ctx is None:
@@ -291,7 +295,7 @@ async def do_transfer(callback: CallbackQuery, callback_data: MemberAction) -> N
         await callback.answer(t.ADMIN_TRANSFER_NOBODY, show_alert=True)
         return
     await callback.answer(t.ADMIN_TRANSFER_DONE.format(name=name))
-    await render_group(callback)
+    await render_group(callback, bot)
 
 
 @router.callback_query(AdminAction.filter(F.action == "delete"))
@@ -313,7 +317,7 @@ async def confirm_delete_group(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(AdminAction.filter(F.action == "deleteyes"))
-async def do_delete_group(callback: CallbackQuery) -> None:
+async def do_delete_group(callback: CallbackQuery, bot: Bot) -> None:
     """Удаляет группу."""
     ctx = await _creator_only(callback)
     if ctx is None:
@@ -321,7 +325,7 @@ async def do_delete_group(callback: CallbackQuery) -> None:
     async with SessionLocal() as session, session.begin():
         await GroupManager(session).delete_group(ctx.group.id)
     await callback.answer(t.GROUP_DELETED)
-    await render_group(callback)
+    await render_group(callback, bot)
 
 
 # ============ Вспомогательные ============

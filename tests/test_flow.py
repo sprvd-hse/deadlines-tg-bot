@@ -1,9 +1,15 @@
 import pytest
 from aiogram import Dispatcher
 
-from src.handlers import chat, groupctl, items, menu, reply, subjects
+from src.handlers import chat, groupctl, inline, items, menu, reply, subjects
 from src.handlers import settings as settings_handlers
-from tests.fake_telegram import callback_update, make_bot, message_update
+from tests.fake_telegram import (
+    added_to_chat_update,
+    callback_update,
+    inline_update,
+    make_bot,
+    message_update,
+)
 
 pytestmark = pytest.mark.usefixtures("app_db")
 
@@ -19,6 +25,7 @@ def _dispatcher() -> Dispatcher:
         groupctl.router,
         settings_handlers.router,
         chat.router,
+        inline.router,
     ):
         dp.include_router(router)
     return dp
@@ -46,6 +53,16 @@ async def app():
     async def tap(fragment: str):
         await press(session.data_of(session.find_button(fragment)))
 
+    async def inline(query: str):
+        counter["n"] += 1
+        await _DP.feed_update(bot, inline_update(query, update_id=counter["n"]))
+
+    async def chat_added():
+        counter["n"] += 1
+        await _DP.feed_update(bot, added_to_chat_update(update_id=counter["n"]))
+
+    session.inline = inline
+    session.chat_added = chat_added
     session.send = send
     session.press = press
     session.tap = tap
@@ -58,6 +75,45 @@ async def _bootstrap_group(app) -> None:
     await app.send("👥 Группа")
     await app.tap("Создать")
     await app.send("кабаньи дедлайны")
+
+
+def _second_user():
+    """Второй пользователь на том же диспетчере."""
+    import tests.fake_telegram as ft
+
+    bot, session = make_bot()
+    counter = {"n": 5000}
+
+    async def send(text: str):
+        counter["n"] += 1
+        await _DP.feed_update(
+            bot,
+            message_update(
+                text,
+                update_id=counter["n"],
+                user_id=ft.USER_ID + 1,
+                chat_id=ft.CHAT_ID + 1,
+            ),
+        )
+
+    session.send = send
+    return session
+
+
+async def _seed_one_task(app, title: str) -> None:
+    """Группа с предметом и одной задачей на завтра."""
+    await _bootstrap_group(app)
+    await _add_subject(app, "Матан")
+    await app.send("➕ Добавить")
+    await app.tap("Задача")
+    await app.tap("Матан")
+    await app.tap("Лаба")
+    await app.send(title)
+    await app.tap("Пропустить")
+    await app.tap("Завтра")
+    await app.tap("23:59")
+    await app.tap("Пропустить")
+    await app.tap("Создать")
 
 
 async def _add_subject(app, name: str) -> None:
@@ -303,3 +359,68 @@ class TestSubjects:
         await app.tap("Добавить")
         await app.send("матан")
         assert "уже есть" in app.last_text
+
+
+class TestInviteLinks:
+    async def test_group_screen_shows_deep_link(self, app):
+        await _bootstrap_group(app)
+        await app.send("👥 Группа")
+        assert "https://t.me/testbot?start=join-" in app.last_text
+
+    async def test_created_group_message_has_link(self, app):
+        await _bootstrap_group(app)
+        assert any("?start=join-" in text for text in app.texts)
+
+    async def test_start_with_payload_joins_group(self, app):
+        await _bootstrap_group(app)
+        await app.send("👥 Группа")
+        code = app.last_text.split("?start=join-")[1].split()[0]
+
+        other = _second_user()
+        await other.send(f"/start join-{code}")
+        assert any("Ты в группе" in text for text in other.texts)
+        assert "Активная группа: <b>кабаньи дедлайны</b>" in other.last_text
+
+    async def test_start_with_broken_payload_falls_back_to_menu(self, app):
+        await app.send("/start join-ZZZZ-ZZZZ-ZZZZ")
+        assert "не найдена" in app.last_text
+
+    async def test_regenerated_code_gives_new_link(self, app):
+        await _bootstrap_group(app)
+        await app.send("👥 Группа")
+        old_link = app.last_text.split("?start=join-")[1].split()[0]
+        await app.tap("Настройки группы")
+        await app.tap("Новый invite-код")
+        assert "?start=join-" in app.last_text
+        assert old_link not in app.last_text
+
+
+class TestInlineMode:
+    async def test_inline_without_group_returns_hint(self, app):
+        await app.send("/start")
+        await app.inline("")
+        assert app.inline_results[0]["title"] == "Нет активной группы"
+
+    async def test_inline_lists_upcoming_items(self, app):
+        await _seed_one_task(app, "Лабораторная 4")
+        await app.inline("")
+        titles = [r["title"] for r in app.inline_results]
+        assert any("Лабораторная 4" in title for title in titles)
+        assert titles[0] == "📅 Все ближайшие дедлайны"
+
+    async def test_inline_filters_by_query(self, app):
+        await _seed_one_task(app, "Лабораторная 4")
+        await app.inline("экзамен")
+        assert app.inline_results[0]["title"] == "Ничего не нашлось"
+
+    async def test_inline_query_matches_subject(self, app):
+        await _seed_one_task(app, "Лабораторная 4")
+        await app.inline("мат")
+        titles = [r["title"] for r in app.inline_results]
+        assert any("Лабораторная 4" in title for title in titles)
+
+
+class TestChatBinding:
+    async def test_bot_offers_binding_when_added(self, app):
+        await app.chat_added()
+        assert "привязать этот чат" in app.last_text

@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, LinkPreviewOptions, Message
 
 from src.db.session import SessionLocal
 from src.services.groups import ActiveContext, GroupContext, GroupManager
@@ -14,22 +14,34 @@ logger = logging.getLogger(__name__)
 
 Event = Message | CallbackQuery
 
+# Ссылки в заданиях не должны разворачиваться превью во весь экран.
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+
 
 async def show(event: Event, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
     """Показывает экран: правит текущее сообщение для callback, иначе шлёт новое."""
     if isinstance(event, CallbackQuery) and isinstance(event.message, Message):
         try:
-            await event.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+            await event.message.edit_text(
+                text,
+                reply_markup=markup,
+                parse_mode="HTML",
+                link_preview_options=NO_PREVIEW,
+            )
             return
         except TelegramBadRequest as exc:
             if "message is not modified" in str(exc):
                 return
             with contextlib.suppress(Exception):
-                await event.message.answer(text, reply_markup=markup, parse_mode="HTML")
+                await event.message.answer(
+                    text, reply_markup=markup, parse_mode="HTML", link_preview_options=NO_PREVIEW
+                )
             return
     message = event if isinstance(event, Message) else event.message
     if message is not None:
-        await message.answer(text, reply_markup=markup, parse_mode="HTML")
+        await message.answer(
+            text, reply_markup=markup, parse_mode="HTML", link_preview_options=NO_PREVIEW
+        )
 
 
 async def notify(event: Event, text: str, *, alert: bool = False) -> None:

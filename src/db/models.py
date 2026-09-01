@@ -42,6 +42,7 @@ class Group(Base):
     digest_hour: Mapped[int] = mapped_column(Integer, nullable=False, default=19)
     digest_last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    digest_pinned_message_id: Mapped[int | None] = mapped_column(BigInteger)
     default_task_offsets: Mapped[list[int]] = mapped_column(
         JSON, nullable=False, default=lambda: list(DEFAULT_TASK_OFFSETS)
     )

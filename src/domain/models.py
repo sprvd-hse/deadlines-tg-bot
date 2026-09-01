@@ -49,6 +49,7 @@ class Group(DomainModel):
     digest_day: int = Field(ge=0, le=6)
     digest_hour: int = Field(ge=0, le=23)
     chat_id: int | None = None
+    digest_pinned_message_id: int | None = None
     digest_last_sent_at: datetime | None = None
     reminders: GroupReminderSettings = Field(default_factory=GroupReminderSettings)
     created_by_user_id: int

@@ -70,13 +70,19 @@ SUBJECT_DUPLICATE = "Такой предмет уже есть."
 SUBJECT_HAS_ITEMS = "Нельзя удалить: на этом предмете есть активные записи."
 SUBJECT_DELETED = "Предмет удалён."
 
-GROUP_HEADER = "👥 Группа <b>{group}</b>\nУчастников: {members}\nInvite-код: <code>{code}</code>"
+GROUP_HEADER = (
+    "👥 Группа <b>{group}</b>\n"
+    "Участников: {members}\n\n"
+    "Ссылка-приглашение — перешли её однокурсникам, вход в один тап:\n"
+    "{link}\n\n"
+    "Или код вручную: <code>{code}</code>"
+)
 GROUP_NONE = "У тебя пока нет группы."
 GROUP_ASK_NAME = "Название группы:"
 GROUP_ASK_CODE = "Пришли invite-код (вид XXXX-XXXX-XXXX):"
 GROUP_CREATED = (
-    "Группа <b>{group}</b> создана.\n"
-    "Invite-код: <code>{code}</code>\n\n"
+    "Группа <b>{group}</b> создана.\n\n"
+    "Ссылка-приглашение:\n{link}\n\n"
     "Дальше добавь предметы — «📚 Предметы»."
 )
 GROUP_JOINED = "Ты в группе <b>{group}</b>."
@@ -104,7 +110,11 @@ ADMIN_DIGEST = "Когда присылать еженедельный дайд�
 ADMIN_DIGEST_DAY = "День недели дайджеста:"
 ADMIN_DIGEST_HOUR = "Час дайджеста:"
 ADMIN_SAVED = "Сохранено."
-ADMIN_CODE_REGENERATED = "Новый invite-код: <code>{code}</code>\nСтарый больше не работает."
+ADMIN_CODE_REGENERATED = (
+    "Новая ссылка-приглашение:\n{link}\n\n"
+    "Код вручную: <code>{code}</code>\n"
+    "Старая ссылка и старый код больше не работают."
+)
 ADMIN_TRANSFER_PICK = "Кому передать роль создателя?"
 ADMIN_TRANSFER_NOBODY = "В группе больше никого нет."
 ADMIN_TRANSFER_DONE = "Готово, теперь создатель — {name}."
@@ -139,3 +149,7 @@ CHAT_NEED_PRIVATE_SETUP = (
 )
 CHAT_CREATOR_ONLY = "Привязать чат может только создатель группы."
 CHAT_NOT_BOUND = "Этот чат не привязан ни к одной группе."
+CHAT_OFFER_BIND = (
+    "Привет! Я умею присылать сюда еженедельный дайджест дедлайнов.\n"
+    "Создатель группы может вызвать /bind_chat, чтобы привязать этот чат."
+)

@@ -16,6 +16,7 @@ def to_domain(row: orm.Group) -> Group:
         digest_day=row.digest_day,
         digest_hour=row.digest_hour,
         chat_id=row.chat_id,
+        digest_pinned_message_id=row.digest_pinned_message_id,
         digest_last_sent_at=row.digest_last_sent_at,
         reminders=GroupReminderSettings(
             task_offsets=list(row.default_task_offsets),

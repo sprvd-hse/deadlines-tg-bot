@@ -15,17 +15,35 @@ from src.services.reminders import ReminderService, schedule_for
 NOW = datetime(2026, 6, 15, 9, 0, tzinfo=UTC)
 
 
+class SentMessage:
+    """Минимальный ответ Telegram на sendMessage."""
+
+    def __init__(self, message_id: int) -> None:
+        self.message_id = message_id
+
+
 class FakeBot:
     """Заглушка бота: собирает отправленные сообщения, умеет падать."""
 
     def __init__(self, fail_for: set[int] | None = None) -> None:
         self.sent: list[tuple[int, str]] = []
+        self.pinned: list[tuple[int, int]] = []
+        self.unpinned: list[tuple[int, int]] = []
         self._fail_for = fail_for or set()
+        self._next_id = 100
 
-    async def send_message(self, chat_id: int, text: str, **kwargs) -> None:
+    async def send_message(self, chat_id: int, text: str, **kwargs) -> SentMessage:
         if chat_id in self._fail_for:
             raise RuntimeError("telegram down")
         self.sent.append((chat_id, text))
+        self._next_id += 1
+        return SentMessage(self._next_id)
+
+    async def pin_chat_message(self, *, chat_id: int, message_id: int, **kwargs) -> None:
+        self.pinned.append((chat_id, message_id))
+
+    async def unpin_chat_message(self, *, chat_id: int, message_id: int, **kwargs) -> None:
+        self.unpinned.append((chat_id, message_id))
 
 
 @pytest.fixture
@@ -466,6 +484,60 @@ class TestDigestService:
         bot = FakeBot()
         assert not await DigestService(factory, bot).send_for_group(group_id, now=NOW)
         assert bot.sent == []
+
+    async def test_digest_is_pinned_in_chat(self, factory):
+        group_id = await self._seed_chat_group(factory)
+        bot = FakeBot()
+        service = DigestService(factory, bot)
+        await service.send_for_group(group_id, now=NOW)
+        assert bot.pinned == [(-100, 101)]
+        assert bot.unpinned == []
+
+    async def test_previous_pin_is_released(self, factory):
+        group_id = await self._seed_chat_group(factory)
+        bot = FakeBot()
+        service = DigestService(factory, bot)
+        await service.send_for_group(group_id, now=NOW)
+        await service.send_for_group(group_id, now=NOW)
+        assert bot.unpinned == [(-100, 101)]
+        assert bot.pinned[-1] == (-100, 102)
+
+    async def test_direct_messages_are_not_pinned(self, factory):
+        async with factory() as session:
+            user, group, subject = await _seed(session)
+            await ItemManager(session).create(
+                group_id=group.id,
+                author_id=user.id,
+                draft=ItemDraft(
+                    kind=ItemKind.TASK,
+                    subject_id=subject.id,
+                    category=TaskCategory.LAB,
+                    title="Лаба",
+                    due_at=NOW + timedelta(days=2),
+                ),
+            )
+            await session.commit()
+        bot = FakeBot()
+        await DigestService(factory, bot).send_for_group(group.id, now=NOW)
+        assert bot.pinned == []
+
+    async def _seed_chat_group(self, factory) -> int:
+        async with factory() as session:
+            user, group, subject = await _seed(session)
+            await ItemManager(session).create(
+                group_id=group.id,
+                author_id=user.id,
+                draft=ItemDraft(
+                    kind=ItemKind.TASK,
+                    subject_id=subject.id,
+                    category=TaskCategory.LAB,
+                    title="Лаба",
+                    due_at=NOW + timedelta(days=2),
+                ),
+            )
+            await GroupManager(session).update_settings(group.id, chat_id=-100)
+            await session.commit()
+        return group.id
 
     async def test_tick_marks_slot_even_when_empty(self, factory):
         async with factory() as session:

@@ -1,4 +1,4 @@
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
@@ -36,10 +36,10 @@ async def btn_subjects(message: Message, state: FSMContext) -> None:
 
 
 @router.message(F.text == kb.BTN_GROUP)
-async def btn_group(message: Message, state: FSMContext) -> None:
+async def btn_group(message: Message, state: FSMContext, bot: Bot) -> None:
     """Кнопка «Группа»."""
     await state.clear()
-    await render_group(message)
+    await render_group(message, bot)
 
 
 @router.message(F.text == kb.BTN_SETTINGS)

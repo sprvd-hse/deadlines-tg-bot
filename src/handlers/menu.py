@@ -1,5 +1,5 @@
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -17,6 +17,17 @@ from src.views.texts import (
 
 router = Router(name="menu")
 router.message.filter(F.chat.type == "private")
+
+
+@router.message(CommandStart(deep_link=True))
+async def cmd_start_deep_link(message: Message, command: CommandObject, state: FSMContext) -> None:
+    """Вход в группу по ссылке-приглашению."""
+    from src.handlers.groupctl import join_by_payload
+
+    await state.clear()
+    await message.answer(START, reply_markup=kb.home_reply(), parse_mode="HTML")
+    if not await join_by_payload(message, state, command.args or ""):
+        await open_home(message)
 
 
 @router.message(CommandStart())

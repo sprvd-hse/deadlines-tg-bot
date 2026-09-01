@@ -1,5 +1,8 @@
+import contextlib
 import logging
 from datetime import UTC, datetime, timedelta
+
+from aiogram.types import LinkPreviewOptions
 
 from src.db.repositories.groups import GroupRepository
 from src.db.repositories.subjects import SubjectRepository
@@ -78,6 +81,7 @@ class DigestService:
                 return False
             messages = await self.build(session, group, now=moment)
             chat_id = group.chat_id
+            previous_pin = group.digest_pinned_message_id
             recipients = (
                 []
                 if chat_id
@@ -89,14 +93,52 @@ class DigestService:
             )
         if not messages:
             return False
-        targets = [chat_id] if chat_id is not None else recipients
-        for target in targets:
-            for text in messages:
-                try:
-                    await self._bot.send_message(target, text, parse_mode="HTML")
-                except Exception:
-                    logger.exception("Не удалось отправить дайджест в чат %s", target)
+        if chat_id is not None:
+            await self._send_to_chat(group_id, chat_id, messages, previous_pin=previous_pin)
+            return True
+        for target in recipients:
+            await self._send_all(target, messages)
         return True
+
+    async def _send_to_chat(
+        self, group_id: int, chat_id: int, messages: list[str], *, previous_pin: int | None
+    ) -> None:
+        """Шлёт дайджест в чат и закрепляет его, откручивая предыдущий закреп."""
+        sent = await self._send_all(chat_id, messages)
+        if not sent:
+            return
+        if previous_pin is not None:
+            with contextlib.suppress(Exception):
+                await self._bot.unpin_chat_message(chat_id=chat_id, message_id=previous_pin)
+        pinned_id: int | None = None
+        try:
+            await self._bot.pin_chat_message(
+                chat_id=chat_id, message_id=sent[0], disable_notification=True
+            )
+            pinned_id = sent[0]
+        except Exception:
+            logger.exception("Не удалось закрепить дайджест в чате %s", chat_id)
+        async with self._session_factory() as session, session.begin():
+            await GroupRepository(session).update_settings(
+                group_id, digest_pinned_message_id=pinned_id
+            )
+
+    async def _send_all(self, target: int, messages: list[str]) -> list[int]:
+        """Отправляет все части дайджеста, возвращает id доставленных сообщений."""
+        sent: list[int] = []
+        for text in messages:
+            try:
+                message = await self._bot.send_message(
+                    target,
+                    text,
+                    parse_mode="HTML",
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
+                )
+            except Exception:
+                logger.exception("Не удалось отправить дайджест в чат %s", target)
+                continue
+            sent.append(message.message_id)
+        return sent
 
     async def tick(self, *, now: datetime | None = None) -> None:
         """Проверяет все группы и рассылает дайджест тем, у кого наступил слот."""

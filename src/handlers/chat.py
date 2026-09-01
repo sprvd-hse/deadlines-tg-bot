@@ -2,8 +2,8 @@ import logging
 from datetime import UTC, datetime
 
 from aiogram import F, Router
-from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.filters import ADMINISTRATOR, IS_NOT_MEMBER, MEMBER, ChatMemberUpdatedFilter, Command
+from aiogram.types import ChatMemberUpdated, Message
 
 from src.db.session import SessionLocal
 from src.services.digest import DEFAULT_HORIZON_DAYS, DigestService
@@ -14,6 +14,19 @@ logger = logging.getLogger(__name__)
 
 router = Router(name="chat")
 router.message.filter(F.chat.type.in_({"group", "supergroup"}))
+router.my_chat_member.filter(F.chat.type.in_({"group", "supergroup"}))
+
+
+@router.my_chat_member(
+    ChatMemberUpdatedFilter(member_status_changed=IS_NOT_MEMBER >> (MEMBER | ADMINISTRATOR))
+)
+async def on_added_to_chat(event: ChatMemberUpdated) -> None:
+    """Предлагает привязать чат сразу после добавления бота."""
+    async with SessionLocal() as session:
+        bound = await GroupManager(session).group_by_chat(event.chat.id)
+    if bound is not None or event.bot is None:
+        return
+    await event.bot.send_message(event.chat.id, t.CHAT_OFFER_BIND)
 
 
 @router.message(Command("bind_chat"))

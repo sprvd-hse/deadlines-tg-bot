@@ -1,6 +1,8 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
+from aiogram.types import LinkPreviewOptions
+
 from src.db.repositories.groups import GroupRepository
 from src.db.repositories.items import ItemRepository
 from src.db.repositories.reminders import ReminderLogRepository
@@ -58,7 +60,12 @@ class ReminderService:
         sent = 0
         for user_id, tg_user_id in recipients:
             try:
-                await self._bot.send_message(tg_user_id, text, parse_mode="HTML")
+                await self._bot.send_message(
+                    tg_user_id,
+                    text,
+                    parse_mode="HTML",
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
+                )
             except Exception:
                 logger.exception(
                     "Не удалось отправить напоминание user=%s item=%s", user_id, item_id
