@@ -11,7 +11,7 @@ from src.domain.calendar import TimeParseError, combine_to_utc, parse_time, toda
 from src.domain.enums import ItemKind
 from src.domain.models import DESCRIPTION_MAX, TITLE_MAX, Group, Item, ItemDraft, ItemPatch
 from src.domain.reminders import resolve_offsets
-from src.handlers.ui import Event, notify, show, show_rich, with_group
+from src.handlers.ui import Event, notify, show, with_group
 from src.scheduler import cancel_item, schedule_item
 from src.services.digest import DEFAULT_HORIZON_DAYS, DigestService
 from src.services.groups import ActiveContext, GroupManager
@@ -64,38 +64,15 @@ async def render_tasks(event: Event) -> None:
     markup = kb.list_keyboard(
         tasks=tasks, events=events, numbers=numbers, completed_ids=board.completed_ids
     )
-    if board.is_empty:
-        await show(
-            event,
-            item_views.render_list(
-                tasks=tasks,
-                events=events,
-                subject_names=board.subject_names,
-                group=ctx.group,
-                now=now,
-            ),
-            markup,
-        )
-        return
-    await show_rich(
-        event,
-        item_views.render_list_rich(
-            tasks=tasks,
-            events=events,
-            subject_names=board.subject_names,
-            completed_ids=board.completed_ids,
-            group=ctx.group,
-            now=now,
-        ),
-        item_views.render_list(
-            tasks=tasks,
-            events=events,
-            subject_names=board.subject_names,
-            group=ctx.group,
-            now=now,
-        ),
-        markup,
+    text = item_views.render_list(
+        tasks=tasks,
+        events=events,
+        subject_names=board.subject_names,
+        group=ctx.group,
+        now=now,
+        completed_ids=board.completed_ids,
     )
+    await show(event, text, markup)
 
 
 @router.callback_query(Nav.filter(F.to == "passed"))

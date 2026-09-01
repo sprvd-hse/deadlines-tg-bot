@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,3 +57,30 @@ class SubjectRepository:
             query = query.where(orm.Item.is_active.is_(True))
         found = (await self._session.execute(query.limit(1))).scalar_one_or_none()
         return found is not None
+
+    async def has_upcoming_items(self, subject_id: int, *, now: datetime) -> bool:
+        """Есть ли у предмета записи с ещё не наступившим дедлайном или без него."""
+        found = (
+            await self._session.execute(
+                select(orm.Item.id)
+                .where(
+                    orm.Item.subject_id == subject_id,
+                    orm.Item.is_active.is_(True),
+                    (orm.Item.due_at.is_(None)) | (orm.Item.due_at >= now),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return found is not None
+
+    async def count_passed_items(self, subject_id: int, *, now: datetime) -> int:
+        """Сколько у предмета прошедших записей."""
+        rows = await self._session.execute(
+            select(orm.Item.id).where(
+                orm.Item.subject_id == subject_id,
+                orm.Item.is_active.is_(True),
+                orm.Item.due_at.is_not(None),
+                orm.Item.due_at < now,
+            )
+        )
+        return len(rows.all())

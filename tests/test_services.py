@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.db.models import Base
 from src.db.repositories.groups import GroupRepository
@@ -11,6 +11,7 @@ from src.services.digest import DigestService, is_digest_due, last_digest_slot
 from src.services.groups import GroupManager, check_join_rate_limit
 from src.services.items import ItemManager
 from src.services.reminders import ReminderService, schedule_for
+from tests.conftest import make_test_engine
 
 NOW = datetime(2026, 6, 15, 9, 0, tzinfo=UTC)
 
@@ -49,7 +50,7 @@ class FakeBot:
 @pytest.fixture
 async def factory():
     """Фабрика сессий поверх одной in-memory базы."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    engine = make_test_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
@@ -147,7 +148,8 @@ class TestGroupManager:
                 title="Лаба",
             ),
         )
-        assert await GroupManager(session).delete_subject(subject.id) == "has_items"
+        status, _ = await GroupManager(session).delete_subject(subject.id, now=NOW)
+        assert status == "has_items"
 
     async def test_regenerated_invite_code_changes(self, session: AsyncSession):
         _, group, _ = await _seed(session)
@@ -635,3 +637,52 @@ class TestCompletions:
         from src.db.repositories.completions import CompletionRepository
 
         assert await CompletionRepository(session).users_who_completed(item.id) == set()
+
+
+class TestSubjectDeletion:
+    async def _seed_subject_with_item(self, session):
+        user, group, subject = await _seed(session)
+        item = await ItemManager(session).create(
+            group_id=group.id,
+            author_id=user.id,
+            draft=ItemDraft(
+                kind=ItemKind.TASK,
+                subject_id=subject.id,
+                category=TaskCategory.LAB,
+                title="Лаба",
+                due_at=NOW + timedelta(days=2),
+            ),
+        )
+        return user, group, subject, item
+
+    async def test_subject_with_deleted_item_can_be_removed(self, session):
+        _, _, subject, item = await self._seed_subject_with_item(session)
+        items = ItemManager(session)
+        await items.delete(item.id)
+
+        status, _ = await GroupManager(session).delete_subject(subject.id, now=NOW)
+        assert status == "ok"
+        await session.flush()
+
+    async def test_removing_subject_purges_its_archived_items(self, session):
+        from src.db.repositories.completions import CompletionRepository
+        from src.db.repositories.items import ItemRepository
+        from src.db.repositories.reminders import ReminderLogRepository
+
+        user, _, subject, item = await self._seed_subject_with_item(session)
+        await ReminderLogRepository(session).mark_sent(
+            item_id=item.id, user_id=user.id, offset_minutes=1440
+        )
+        await CompletionRepository(session).mark(user_id=user.id, item_id=item.id)
+        await ItemManager(session).delete(item.id)
+
+        status, _ = await GroupManager(session).delete_subject(subject.id, now=NOW)
+        assert status == "ok"
+        await session.flush()
+        assert await ItemRepository(session).get(item.id) is None
+        assert await CompletionRepository(session).users_who_completed(item.id) == set()
+
+    async def test_subject_with_live_item_is_kept(self, session):
+        _, _, subject, _ = await self._seed_subject_with_item(session)
+        status, _ = await GroupManager(session).delete_subject(subject.id, now=NOW)
+        assert status == "has_items"

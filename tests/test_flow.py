@@ -347,10 +347,10 @@ class TestSubjects:
     async def test_add_and_delete_subject(self, app):
         await _bootstrap_group(app)
         await _add_subject(app, "Матан")
-        assert "Матан" in str(app.last_markup)
+        assert "1. Матан" in app.last_text
         await app.send("📚 Предметы")
         await app.tap("🗑")
-        assert "Матан" not in str(app.last_markup)
+        assert "Матан" not in app.last_text
 
     async def test_duplicate_subject_rejected(self, app):
         await _bootstrap_group(app)
@@ -427,25 +427,24 @@ class TestChatBinding:
 
 
 class TestChecklist:
-    async def test_list_renders_checkboxes(self, app):
+    async def test_list_shows_unchecked_items(self, app):
         await _seed_one_task(app, "Лабораторная 4")
         await app.send("📋 Задания")
-        assert '<input type="checkbox">' in app.last_text
         assert "Лабораторная 4" in app.last_text
+        assert "<s>" not in app.last_text
 
-    async def test_toggle_from_list_checks_the_box(self, app):
+    async def test_toggle_from_list_marks_item(self, app):
         await _seed_one_task(app, "Лабораторная 4")
         await app.send("📋 Задания")
         await app.tap("☐")
-        assert '<input type="checkbox" checked>' in app.last_text
         assert "<s>Лабораторная 4</s>" in app.last_text
+        assert "✅" in app.last_text
 
     async def test_toggle_twice_returns_to_unchecked(self, app):
         await _seed_one_task(app, "Лабораторная 4")
         await app.send("📋 Задания")
         await app.tap("☐")
         await app.tap("✅")
-        assert '<input type="checkbox">' in app.last_text
         assert "<s>" not in app.last_text
 
     async def test_card_shows_and_toggles_completion(self, app):
@@ -466,15 +465,34 @@ class TestChecklist:
         code = app.last_text.split("?start=join-")[1].split()[0]
         await app.send("📋 Задания")
         await app.tap("☐")
-        assert '<input type="checkbox" checked>' in app.last_text
+        assert "<s>Лабораторная 4</s>" in app.last_text
 
         other = _second_user()
         await other.send(f"/start join-{code}")
         await other.send("📋 Задания")
-        assert '<input type="checkbox">' in other.last_text
+        assert "Лабораторная 4" in other.last_text
         assert "<s>" not in other.last_text
 
     async def test_empty_list_stays_plain(self, app):
         await _bootstrap_group(app)
         await app.send("📋 Задания")
         assert "Пока пусто" in app.last_text
+
+
+class TestSubjectDeletionFlow:
+    async def test_subject_deletes_after_its_task_was_removed(self, app):
+        await _seed_one_task(app, "Лабораторная 4")
+        await app.send("📋 Задания")
+        await app.tap("Лабораторная 4")
+        await app.tap("Удалить")
+        await app.tap("Да, удалить")
+
+        await app.send("📚 Предметы")
+        await app.tap("🗑")
+        assert "Матан" not in app.last_text
+
+    async def test_subject_with_live_task_is_kept(self, app):
+        await _seed_one_task(app, "Лабораторная 4")
+        await app.send("📚 Предметы")
+        await app.tap("🗑")
+        assert "Матан" in app.last_text

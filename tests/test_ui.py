@@ -5,7 +5,7 @@ import pytest
 from src.domain.enums import ItemKind, TaskCategory
 from src.domain.models import Group, Item
 from src.ui import keyboards as kb
-from src.ui.callbacks import AddStep, CalendarNav, ItemAction, Nav, OffsetToggle
+from src.ui.callbacks import NOOP, AddStep, CalendarNav, ItemAction, Nav, OffsetToggle
 
 TODAY = date(2026, 6, 15)
 GROUP = Group(
@@ -66,15 +66,14 @@ class TestCalendarKeyboard:
 
     def test_past_days_are_not_clickable(self):
         buttons = _buttons(self._markup())
-        picks = [b for b in buttons if b.callback_data and b.callback_data.startswith("cal:pick")]
+        picks = [b for b in buttons if b.callback_data.startswith("cal:pick")]
         days = {CalendarNav.unpack(b.callback_data).day for b in picks}
         assert min(days) == TODAY.day
 
-    def test_past_days_are_disabled_buttons(self):
+    def test_past_days_are_inert(self):
         buttons = _buttons(self._markup())
-        past = [b for b in buttons if b.text == "1"]
-        assert past and all(b.disabled is not None for b in past)
-        assert all(b.callback_data is None for b in past)
+        inert = [b for b in buttons if b.text == "·"]
+        assert inert and all(b.callback_data == NOOP for b in inert)
 
     def test_today_is_marked(self):
         labels = [b.text for b in _buttons(self._markup())]
@@ -82,17 +81,15 @@ class TestCalendarKeyboard:
 
     def test_back_arrow_disabled_in_current_month(self):
         buttons = _buttons(self._markup())
-        arrow = next(b for b in buttons if b.text == "‹")
-        assert arrow.disabled is not None
-        assert arrow.callback_data is None
+        assert not any(b.text == "‹" and b.callback_data != NOOP for b in buttons)
 
     def test_back_arrow_enabled_in_later_month(self):
         arrow = next(b for b in _buttons(self._markup(month=8)) if b.text == "‹")
         assert arrow.callback_data is not None
 
     def test_forward_limited_two_years_ahead(self):
-        arrow = next(b for b in _buttons(self._markup(year=2028, month=6)) if b.text == "›")
-        assert arrow.disabled is not None
+        buttons = _buttons(self._markup(year=2028, month=6))
+        assert not any(b.text == "›" and b.callback_data != NOOP for b in buttons)
 
     def test_quick_buttons_present(self):
         labels = [b.text for b in _buttons(self._markup())]

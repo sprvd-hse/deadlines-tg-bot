@@ -4,13 +4,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardMarkup,
-    InputRichMessage,
-    LinkPreviewOptions,
-    Message,
-)
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, LinkPreviewOptions, Message
 
 from src.db.session import SessionLocal
 from src.services.groups import ActiveContext, GroupContext, GroupManager
@@ -48,31 +42,6 @@ async def show(event: Event, text: str, markup: InlineKeyboardMarkup | None = No
         await message.answer(
             text, reply_markup=markup, parse_mode="HTML", link_preview_options=NO_PREVIEW
         )
-
-
-async def show_rich(
-    event: Event, rich_html: str, fallback: str, markup: InlineKeyboardMarkup | None = None
-) -> None:
-    """Показывает экран как rich-сообщение; при отказе Telegram — обычным HTML."""
-    rich = InputRichMessage(html=rich_html)
-    message = event.message if isinstance(event, CallbackQuery) else event
-    if not isinstance(message, Message) or message.bot is None:
-        return
-    try:
-        if isinstance(event, CallbackQuery):
-            await message.edit_text(rich_message=rich, reply_markup=markup)
-        else:
-            await message.bot.send_rich_message(
-                chat_id=message.chat.id, rich_message=rich, reply_markup=markup
-            )
-        return
-    except TelegramBadRequest as exc:
-        if "message is not modified" in str(exc):
-            return
-        logger.warning("Rich-сообщение отклонено, показываю обычный текст: %s", exc)
-    except Exception:
-        logger.exception("Не удалось отправить rich-сообщение")
-    await show(event, fallback, markup)
 
 
 async def notify(event: Event, text: str, *, alert: bool = False) -> None:

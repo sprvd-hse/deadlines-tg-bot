@@ -1,12 +1,14 @@
 import logging
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
 from src.db.repositories.groups import GroupRepository
+from src.db.repositories.items import ItemRepository
 from src.db.repositories.subjects import SubjectRepository
 from src.db.repositories.users import UserRepository
 from src.domain.enums import MemberRole
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 JoinStatus = Literal["ok", "not_found", "already_member", "rate_limited"]
 TransferStatus = Literal["ok", "not_member", "same_user"]
 LeaveStatus = Literal["left", "group_deleted", "need_transfer", "not_member"]
-SubjectStatus = Literal["ok", "duplicate", "not_found", "has_items"]
+SubjectStatus = Literal["ok", "duplicate", "not_found", "has_items", "needs_confirm"]
 
 _INVITE_RETRIES = 5
 _JOIN_RATE_WINDOW = 60.0
@@ -88,6 +90,7 @@ class GroupManager:
         self._groups = GroupRepository(session)
         self._users = UserRepository(session)
         self._subjects = SubjectRepository(session)
+        self._items = ItemRepository(session)
 
     async def context(
         self, *, tg_user_id: int, tg_username: str | None, full_name: str
@@ -225,15 +228,30 @@ class GroupManager:
             return None, "duplicate"
         return await self._subjects.create(group_id=group_id, name=name), "ok"
 
-    async def delete_subject(self, subject_id: int) -> SubjectStatus:
-        """Удаляет предмет, если на нём нет активных записей."""
+    async def delete_subject(
+        self, subject_id: int, *, now: datetime | None = None, confirmed: bool = False
+    ) -> tuple[SubjectStatus, int]:
+        """Удаляет предмет и возвращает статус вместе с числом прошедших записей.
+
+        Предмет с будущими дедлайнами не удаляется вовсе. Если остались только
+        прошедшие записи, первый вызов просит подтверждения, а с `confirmed`
+        удаляет их вместе с предметом. Скрытые записи вычищаются всегда: они
+        невидимы пользователю, но блокировали бы удаление по внешнему ключу.
+        """
+        moment = now or datetime.now(tz=UTC)
         subject = await self._subjects.get(subject_id)
         if subject is None:
-            return "not_found"
-        if await self._subjects.has_items(subject_id):
-            return "has_items"
+            return "not_found", 0
+        if await self._subjects.has_upcoming_items(subject_id, now=moment):
+            return "has_items", 0
+        passed = await self._subjects.count_passed_items(subject_id, now=moment)
+        if passed and not confirmed:
+            return "needs_confirm", passed
+        purged = await self._items.purge_for_subject(subject_id, archived_only=not passed)
+        if purged:
+            logger.info("Предмет %s: удалено %s записей", subject_id, purged)
         await self._subjects.delete(subject_id)
-        return "ok"
+        return "ok", passed
 
     async def _unique_invite_code(self) -> str:
         for _ in range(_INVITE_RETRIES):
