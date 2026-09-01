@@ -48,57 +48,27 @@ def render_list(
     subject_names: dict[int, str],
     group: Group,
     now: datetime,
+    completed_ids: frozenset[int] = frozenset(),
 ) -> str:
     """Собирает текст списка: задачи и важные даты отдельными секциями."""
     numbers = item_number_map(tasks, events)
     sections = [
-        _render_section(LIST_HEADER_TASKS, tasks, subject_names, group, now, numbers),
-        _render_section(LIST_HEADER_EVENTS, events, subject_names, group, now, numbers),
+        _render_section(
+            LIST_HEADER_TASKS, tasks, subject_names, group, now, numbers, completed_ids
+        ),
+        _render_section(
+            LIST_HEADER_EVENTS, events, subject_names, group, now, numbers, completed_ids
+        ),
     ]
     body = join_blocks(sections)
     return body or EMPTY_LIST
 
 
-def render_list_rich(
-    *,
-    tasks: list[Item],
-    events: list[Item],
-    subject_names: dict[int, str],
-    completed_ids: frozenset[int],
-    group: Group,
-    now: datetime,
-) -> str:
-    """Список в разметке Rich HTML: чек-боксы, заголовки секций и предметов.
-
-    Галочка нарисована, но не нажимается — Telegram не шлёт о ней событий,
-    поэтому переключают её кнопки под сообщением.
-    """
-    numbers = item_number_map(tasks, events)
-    parts: list[str] = []
-    for header, section_items in (
-        (LIST_HEADER_TASKS, tasks),
-        (LIST_HEADER_EVENTS, events),
-    ):
-        if not section_items:
-            continue
-        parts.append(f"<h3>{esc(header)}</h3>")
-        by_subject: dict[int, list[Item]] = {}
-        for item in section_items:
-            by_subject.setdefault(item.subject_id, []).append(item)
-        for subject_id, subject_items in by_subject.items():
-            parts.append(f"<p><b>{esc(subject_names.get(subject_id, '?'))}</b></p>")
-            rows = []
-            for item in subject_items:
-                checked = " checked" if item.id in completed_ids else ""
-                title = esc(item.title)
-                if item.id in completed_ids:
-                    title = f"<s>{title}</s>"
-                rows.append(
-                    f'<li><input type="checkbox"{checked}>'
-                    f"{numbers[item.id]}. {title} — {_due_short(item, group, now)}</li>"
-                )
-            parts.append(f"<ul>{''.join(rows)}</ul>")
-    return "".join(parts) or f"<p>{esc(EMPTY_LIST)}</p>"
+def render_subjects(subjects: list) -> str:
+    """Нумерованный список предметов для текста сообщения."""
+    if not subjects:
+        return ""
+    return "\n".join(f"{i}. {esc(s.name)}" for i, s in enumerate(subjects, start=1))
 
 
 def render_passed(
@@ -226,6 +196,7 @@ def _render_section(
     group: Group,
     now: datetime,
     numbers: dict[int, int],
+    completed_ids: frozenset[int],
 ) -> str:
     if not items:
         return ""
@@ -238,7 +209,12 @@ def _render_section(
         lines.append("")
         lines.append(bold(subject_names.get(subject_id, "?")))
         for item in subject_items:
-            lines.append(f"{numbers[item.id]}. {esc(item.title)} — {_due_short(item, group, now)}")
+            title = esc(item.title)
+            mark = ""
+            if item.id in completed_ids:
+                title = f"<s>{title}</s>"
+                mark = "✅ "
+            lines.append(f"{numbers[item.id]}. {mark}{title} — {_due_short(item, group, now)}")
     return "\n".join(lines)
 
 

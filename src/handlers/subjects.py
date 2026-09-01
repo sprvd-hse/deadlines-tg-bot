@@ -9,6 +9,7 @@ from src.services.groups import GroupManager
 from src.states import SubjectInput
 from src.ui import keyboards as kb
 from src.ui.callbacks import Nav, SubjectAction
+from src.views import items as item_views
 from src.views import texts as t
 from src.views.common import esc
 
@@ -32,8 +33,10 @@ async def render_subjects(event: Event) -> None:
         return
     async with SessionLocal() as session:
         subjects = await GroupManager(session).subjects(ctx.group.id)
-    header = t.SUBJECTS_HEADER.format(group=esc(ctx.group.name))
-    body = header if subjects else f"{header}\n\n{t.SUBJECTS_EMPTY}"
+    body = t.SUBJECTS_HEADER.format(
+        group=esc(ctx.group.name),
+        list=item_views.render_subjects(subjects) or t.SUBJECTS_EMPTY,
+    )
     await show(event, body, kb.subjects_manage_keyboard(subjects))
 
 

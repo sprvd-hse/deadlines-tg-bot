@@ -64,7 +64,7 @@ CONFIRM_DELETE_ITEM = "Удалить запись «{title}»?"
 
 DIGEST_EMPTY = "В ближайшие {days} дней дедлайнов нет."
 
-SUBJECTS_HEADER = "📚 Предметы группы <b>{group}</b>"
+SUBJECTS_HEADER = "📚 Предметы группы <b>{group}</b>\n\n{list}"
 SUBJECTS_EMPTY = "Предметов пока нет."
 SUBJECT_ASK_NAME = "Название предмета:"
 SUBJECT_ADDED = "Предмет «{name}» добавлен."
