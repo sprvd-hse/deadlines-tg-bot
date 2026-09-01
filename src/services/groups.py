@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
 from src.db.repositories.groups import GroupRepository
+from src.db.repositories.items import ItemRepository
 from src.db.repositories.subjects import SubjectRepository
 from src.db.repositories.users import UserRepository
 from src.domain.enums import MemberRole
@@ -88,6 +89,7 @@ class GroupManager:
         self._groups = GroupRepository(session)
         self._users = UserRepository(session)
         self._subjects = SubjectRepository(session)
+        self._items = ItemRepository(session)
 
     async def context(
         self, *, tg_user_id: int, tg_username: str | None, full_name: str
@@ -226,12 +228,19 @@ class GroupManager:
         return await self._subjects.create(group_id=group_id, name=name), "ok"
 
     async def delete_subject(self, subject_id: int) -> SubjectStatus:
-        """Удаляет предмет, если на нём нет активных записей."""
+        """Удаляет предмет, если на нём нет активных записей.
+
+        Ранее удалённые записи предмета вычищаются окончательно: они не видны
+        пользователю, но мешали бы удалению по внешнему ключу.
+        """
         subject = await self._subjects.get(subject_id)
         if subject is None:
             return "not_found"
         if await self._subjects.has_items(subject_id):
             return "has_items"
+        purged = await self._items.purge_archived(subject_id)
+        if purged:
+            logger.info("Предмет %s: удалено %s архивных записей", subject_id, purged)
         await self._subjects.delete(subject_id)
         return "ok"
 

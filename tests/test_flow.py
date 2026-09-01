@@ -478,3 +478,23 @@ class TestChecklist:
         await _bootstrap_group(app)
         await app.send("📋 Задания")
         assert "Пока пусто" in app.last_text
+
+
+class TestSubjectDeletionFlow:
+    async def test_subject_deletes_after_its_task_was_removed(self, app):
+        await _seed_one_task(app, "Лабораторная 4")
+        await app.send("📋 Задания")
+        await app.tap("Лабораторная 4")
+        await app.tap("Удалить")
+        await app.tap("Да, удалить")
+
+        await app.send("📚 Предметы")
+        await app.tap("🗑")
+        assert "Матан" not in str(app.last_markup)
+        assert "Нельзя удалить" not in app.last_text
+
+    async def test_subject_with_live_task_is_kept(self, app):
+        await _seed_one_task(app, "Лабораторная 4")
+        await app.send("📚 Предметы")
+        await app.tap("🗑")
+        assert "Матан" in str(app.last_markup)

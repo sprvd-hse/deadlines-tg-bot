@@ -151,6 +151,24 @@ class ItemRepository:
         )
         return [to_domain(r) for r in rows.scalars()]
 
+    async def purge_archived(self, subject_id: int) -> int:
+        """Окончательно удаляет мягко удалённые записи предмета.
+
+        Нужно перед удалением самого предмета: у items.subject_id стоит
+        ON DELETE RESTRICT, поэтому скрытые записи блокируют удаление.
+        Журнал напоминаний и отметки уходят по каскаду.
+        """
+        rows = await self._session.execute(
+            select(orm.Item.id).where(
+                orm.Item.subject_id == subject_id, orm.Item.is_active.is_(False)
+            )
+        )
+        item_ids = list(rows.scalars())
+        if not item_ids:
+            return 0
+        await self._session.execute(delete(orm.Item).where(orm.Item.id.in_(item_ids)))
+        return len(item_ids)
+
     async def clear_reminder_log(self, item_id: int) -> None:
         """Сбрасывает журнал отправленных напоминаний записи."""
         await self._session.execute(
