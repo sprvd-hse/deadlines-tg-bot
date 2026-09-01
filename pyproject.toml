@@ -5,7 +5,7 @@ description = "Telegram-бот для учёта дедлайнов учебно
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "aiogram>=3.13,<4",
+    "aiogram>=3.31,<4",
     "sqlalchemy[asyncio]>=2.0,<3",
     "aiosqlite>=0.20",
     "alembic>=1.13,<2",
@@ -52,7 +52,7 @@ ignore = [
 quote-style = "double"
 
 [tool.ty.src]
-include = ["bot"]
+include = ["src"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

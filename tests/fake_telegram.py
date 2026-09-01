@@ -1,0 +1,188 @@
+import datetime as dt
+from typing import Any
+
+from aiogram import Bot
+from aiogram.client.session.base import BaseSession
+from aiogram.methods import TelegramMethod
+from aiogram.types import Chat, Message, Update, User
+
+CHAT_ID = 500
+USER_ID = 777
+
+
+class FakeSession(BaseSession):
+    """Сессия-заглушка: не ходит в сеть, запоминает вызовы API."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.inline_results: list[Any] = []
+        self._message_id = 1000
+
+    async def close(self) -> None:
+        return None
+
+    async def stream_content(self, *args, **kwargs):  # pragma: no cover - не используется
+        yield b""
+
+    async def make_request(self, bot: Bot, method: TelegramMethod, timeout: int | None = None):
+        name = type(method).__name__
+        payload = method.model_dump(exclude_none=True)
+        self.calls.append((name, payload))
+        if name == "SendRichMessage":
+            self._message_id += 1
+            return Message(
+                message_id=self._message_id,
+                date=dt.datetime.now(tz=dt.UTC),
+                chat=Chat(id=payload.get("chat_id", CHAT_ID), type="private"),
+                text=_rich_html(payload),
+            )
+        if name in {"SendMessage", "EditMessageText"}:
+            self._message_id += 1
+            return Message(
+                message_id=self._message_id,
+                date=dt.datetime.now(tz=dt.UTC),
+                chat=Chat(id=payload.get("chat_id", CHAT_ID), type="private"),
+                text=payload.get("text", ""),
+            )
+        if name == "AnswerInlineQuery":
+            self.inline_results = payload.get("results", [])
+            return True
+        if name == "GetMe":
+            return User(id=1, is_bot=True, first_name="bot", username="testbot")
+        return True
+
+    @property
+    def texts(self) -> list[str]:
+        """Тексты всех показанных экранов, включая rich-сообщения."""
+        return [
+            payload.get("text") or _rich_html(payload)
+            for name, payload in self.calls
+            if name in {"SendMessage", "EditMessageText", "SendRichMessage"}
+        ]
+
+    @property
+    def last_text(self) -> str:
+        """Текст последнего показанного экрана."""
+        return self.texts[-1] if self.texts else ""
+
+    @property
+    def last_markup(self) -> Any:
+        """Клавиатура последнего экрана."""
+        for name, payload in reversed(self.calls):
+            if name in {"SendMessage", "EditMessageText", "SendRichMessage"} and payload.get(
+                "reply_markup"
+            ):
+                return payload["reply_markup"]
+        return None
+
+    def buttons(self) -> list[Any]:
+        """Плоский список инлайн-кнопок последнего экрана."""
+        markup = self.last_markup
+        if markup is None:
+            return []
+        rows = markup["inline_keyboard"] if isinstance(markup, dict) else markup.inline_keyboard
+        return [button for row in rows for button in row]
+
+    def find_button(self, text_fragment: str):
+        """Ищет кнопку по фрагменту подписи."""
+        for button in self.buttons():
+            label = button["text"] if isinstance(button, dict) else button.text
+            if text_fragment in label:
+                return button
+        raise AssertionError(
+            f"Кнопка «{text_fragment}» не найдена среди: "
+            f"{[b['text'] if isinstance(b, dict) else b.text for b in self.buttons()]}"
+        )
+
+    @staticmethod
+    def data_of(button) -> str:
+        """callback_data кнопки."""
+        return button["callback_data"] if isinstance(button, dict) else button.callback_data
+
+    def clear(self) -> None:
+        """Сбрасывает историю вызовов."""
+        self.calls.clear()
+
+
+def _rich_html(payload: dict) -> str:
+    """HTML rich-сообщения из полезной нагрузки метода."""
+    rich = payload.get("rich_message")
+    if not rich:
+        return ""
+    return rich.get("html", "") if isinstance(rich, dict) else (rich.html or "")
+
+
+def make_bot() -> tuple[Bot, FakeSession]:
+    """Бот поверх сессии-заглушки."""
+    session = FakeSession()
+    return Bot(token="42:testtoken", session=session), session
+
+
+def message_update(
+    text: str, *, update_id: int = 1, user_id: int = USER_ID, chat_id: int = CHAT_ID
+) -> Update:
+    """Апдейт с текстовым сообщением от пользователя."""
+    return Update(
+        update_id=update_id,
+        message=Message(
+            message_id=update_id,
+            date=dt.datetime.now(tz=dt.UTC),
+            chat=Chat(id=chat_id, type="private"),
+            from_user=User(id=user_id, is_bot=False, first_name="Боря", username="borya"),
+            text=text,
+        ),
+    )
+
+
+def callback_update(data: str, *, update_id: int = 1) -> Update:
+    """Апдейт с нажатием инлайн-кнопки."""
+    from aiogram.types import CallbackQuery
+
+    return Update(
+        update_id=update_id,
+        callback_query=CallbackQuery(
+            id=str(update_id),
+            from_user=User(id=USER_ID, is_bot=False, first_name="Аня", username="anya"),
+            chat_instance="1",
+            data=data,
+            message=Message(
+                message_id=900,
+                date=dt.datetime.now(tz=dt.UTC),
+                chat=Chat(id=CHAT_ID, type="private"),
+                text="экран",
+            ),
+        ),
+    )
+
+
+def inline_update(query: str, *, update_id: int = 1) -> Update:
+    """Апдейт с inline-запросом."""
+    from aiogram.types import InlineQuery
+
+    return Update(
+        update_id=update_id,
+        inline_query=InlineQuery(
+            id=str(update_id),
+            from_user=User(id=USER_ID, is_bot=False, first_name="Аня", username="anya"),
+            query=query,
+            offset="",
+        ),
+    )
+
+
+def added_to_chat_update(chat_id: int = -100500, *, update_id: int = 1) -> Update:
+    """Апдейт о добавлении бота в групповой чат."""
+    from aiogram.types import ChatMemberLeft, ChatMemberMember, ChatMemberUpdated
+
+    bot_user = User(id=1, is_bot=True, first_name="bot", username="testbot")
+    return Update(
+        update_id=update_id,
+        my_chat_member=ChatMemberUpdated(
+            chat=Chat(id=chat_id, type="supergroup"),
+            from_user=User(id=USER_ID, is_bot=False, first_name="Аня"),
+            date=dt.datetime.now(tz=dt.UTC),
+            old_chat_member=ChatMemberLeft(user=bot_user),
+            new_chat_member=ChatMemberMember(user=bot_user),
+        ),
+    )

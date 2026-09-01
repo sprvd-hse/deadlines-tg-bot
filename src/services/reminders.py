@@ -1,200 +1,125 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from aiogram.types import LinkPreviewOptions
 
-from src.db.models import (
-    Assignment,
-    AssignmentType,
-    Group,
-    GroupMember,
-    ReminderLog,
-    ReminderType,
-    Subject,
-    User,
-)
-from src.keyboards import ASSIGNMENT_TYPE_LABELS
-from src.utils import format_deadline_display
+from src.db.repositories.completions import CompletionRepository
+from src.db.repositories.groups import GroupRepository
+from src.db.repositories.items import ItemRepository
+from src.db.repositories.reminders import ReminderLogRepository
+from src.db.repositories.subjects import SubjectRepository
+from src.domain.humanize import ensure_utc
+from src.domain.models import Group, Item
+from src.domain.reminders import ScheduledReminder, plan_reminders, resolve_offsets
+from src.views.reminders import render_reminder
 
 logger = logging.getLogger(__name__)
 
-OFFSETS_BY_TYPE: dict[AssignmentType, list[tuple[ReminderType, timedelta]]] = {
-    AssignmentType.homework: [(ReminderType.advance_1d, timedelta(days=1))],
-    AssignmentType.test: [
-        (ReminderType.advance_7d, timedelta(days=7)),
-        (ReminderType.advance_3d, timedelta(days=3)),
-        (ReminderType.advance_1d, timedelta(days=1)),
-    ],
-    AssignmentType.control: [
-        (ReminderType.advance_7d, timedelta(days=7)),
-        (ReminderType.advance_3d, timedelta(days=3)),
-        (ReminderType.advance_1d, timedelta(days=1)),
-    ],
-    AssignmentType.exam: [
-        (ReminderType.advance_7d, timedelta(days=7)),
-        (ReminderType.advance_3d, timedelta(days=3)),
-        (ReminderType.advance_1d, timedelta(days=1)),
-    ],
-    AssignmentType.lab: [
-        (ReminderType.advance_3d, timedelta(days=3)),
-        (ReminderType.advance_1d, timedelta(days=1)),
-    ],
-    AssignmentType.project: [
-        (ReminderType.advance_3d, timedelta(days=3)),
-        (ReminderType.advance_1d, timedelta(days=1)),
-    ],
-    AssignmentType.other: [(ReminderType.advance_1d, timedelta(days=1))],
-}
-
+# Напоминание, чьё время уже прошло, догоняем при старте, только если до дедлайна
+# осталось хотя бы столько.
 RECOVERY_MIN_LEAD = timedelta(minutes=30)
 
-_OFFSET_LABELS: dict[ReminderType, str] = {
-    ReminderType.advance_7d: "за 7 дней",
-    ReminderType.advance_3d: "за 3 дня",
-    ReminderType.advance_1d: "за 1 день",
-}
+
+def schedule_for(item: Item, group: Group) -> list[ScheduledReminder]:
+    """Считает расписание напоминаний записи по настройкам её группы."""
+    offsets = resolve_offsets(
+        kind=item.kind,
+        item_offsets=item.reminder_offsets,
+        muted=item.reminders_muted,
+        settings=group.reminders,
+    )
+    return plan_reminders(
+        due_at=item.due_at,
+        offsets=offsets,
+        tz=group.tz,
+        reminder_hour=group.reminders.reminder_hour,
+    )
 
 
-def offsets_for(assignment_type: AssignmentType) -> list[tuple[ReminderType, timedelta]]:
-    return OFFSETS_BY_TYPE.get(assignment_type, [])
+class ReminderService:
+    """Рассылка личных напоминаний с защитой от повторов."""
 
+    def __init__(self, session_factory, bot) -> None:
+        self._session_factory = session_factory
+        self._bot = bot
 
-def build_reminder_text(
-    *,
-    group_name: str,
-    group_tz: str,
-    assignment: Assignment,
-    subject_name: str,
-    reminder_type: ReminderType,
-) -> str:
-    type_label = ASSIGNMENT_TYPE_LABELS.get(assignment.type, assignment.type.value)
-    deadline_str = format_deadline_display(assignment.deadline, group_tz)
-    offset_label = _OFFSET_LABELS.get(reminder_type, "")
-    lines = [
-        f"Напоминание {offset_label} ({group_name}):",
-        f"#{assignment.short_id} [{type_label}] {assignment.title} ({subject_name})",
-        f"Дедлайн: {deadline_str}",
-    ]
-    if assignment.description:
-        lines.append(assignment.description)
-    if assignment.links:
-        lines.extend(assignment.links)
-    return "\n".join(lines)
+    async def send_batch(
+        self, *, item_id: int, offset_minutes: int, now: datetime | None = None
+    ) -> int:
+        """Рассылает одно напоминание всем подходящим участникам группы.
 
-
-async def recipients_for(
-    session: AsyncSession, assignment: Assignment
-) -> list[User]:
-    """Участники группы с personal_reminders_enabled=True."""
-    rows = (
-        await session.execute(
-            select(User)
-            .join(GroupMember, GroupMember.user_id == User.id)
-            .where(
-                GroupMember.group_id == assignment.group_id,
-                GroupMember.personal_reminders_enabled.is_(True),
-            )
-        )
-    ).scalars()
-    return list(rows)
-
-
-async def already_logged_user_ids(
-    session: AsyncSession, *, assignment_id: int, reminder_type: ReminderType
-) -> set[int]:
-    rows = (
-        await session.execute(
-            select(ReminderLog.user_id).where(
-                ReminderLog.assignment_id == assignment_id,
-                ReminderLog.reminder_type == reminder_type,
-            )
-        )
-    ).scalars()
-    return {uid for uid in rows if uid is not None}
-
-
-async def fetch_context(
-    session: AsyncSession, assignment_id: int
-) -> tuple[Assignment, Group, str] | None:
-    """Возвращает (assignment, group, subject_name) либо None, если задание неактивно/удалено."""
-    a = await session.get(Assignment, assignment_id)
-    if a is None or not a.is_active:
-        return None
-    group = await session.get(Group, a.group_id)
-    if group is None:
-        return None
-    subject = await session.get(Subject, a.subject_id)
-    subject_name = subject.name if subject is not None else "?"
-    return a, group, subject_name
-
-
-async def send_reminder_batch(
-    session_factory,
-    bot,
-    *,
-    assignment_id: int,
-    reminder_type: ReminderType,
-    now_utc: datetime | None = None,
-) -> int:
-    """Отправляет личные напоминания всем подходящим участникам, пишет ReminderLog.
-
-    Идемпотентно: на каждого получателя своя транзакция, ReminderLog коммитится
-    сразу после успешной отправки, поэтому при сбое в середине батча не будет
-    дублей при ретрае. `session_factory` — async_sessionmaker (например, SessionLocal).
-    """
-    now = now_utc or datetime.now(tz=UTC)
-
-    # Подготовка: один read-снимок контекста, получателей и уже разосланных.
-    async with session_factory() as session:
-        ctx = await fetch_context(session, assignment_id)
-        if ctx is None:
+        Каждый получатель обрабатывается отдельной транзакцией: журнал коммитится
+        сразу после успешной отправки, поэтому падение в середине рассылки не
+        приводит к дублям при повторе.
+        """
+        moment = now or datetime.now(tz=UTC)
+        prepared = await self._prepare(item_id=item_id, offset_minutes=offset_minutes, now=moment)
+        if prepared is None:
             return 0
-        assignment, group, subject_name = ctx
-        from src.utils import ensure_utc as _ensure_utc
-        if assignment.deadline is None or _ensure_utc(assignment.deadline) <= now:
-            return 0
-        already = await already_logged_user_ids(
-            session, assignment_id=assignment_id, reminder_type=reminder_type
-        )
-        recipients = await recipients_for(session, assignment)
-        text = build_reminder_text(
-            group_name=group.name,
-            group_tz=group.timezone,
-            assignment=assignment,
-            subject_name=subject_name,
-            reminder_type=reminder_type,
-        )
-        recipient_pairs = [(u.id, u.tg_user_id) for u in recipients if u.id not in already]
+        text, recipients = prepared
 
-    sent = 0
-    for user_id, tg_user_id in recipient_pairs:
-        try:
-            await bot.send_message(tg_user_id, text)
-        except Exception:
-            logger.exception(
-                "Не удалось отправить напоминание user=%s assignment=%s",
-                user_id,
-                assignment_id,
-            )
-            continue
-        # Коммитим лог сразу после успешной отправки — это даёт идемпотентность
-        # при падениях между отправками.
-        try:
-            async with session_factory() as log_session, log_session.begin():
-                log_session.add(
-                    ReminderLog(
-                        assignment_id=assignment_id,
-                        user_id=user_id,
-                        reminder_type=reminder_type,
-                    )
+        sent = 0
+        for user_id, tg_user_id in recipients:
+            try:
+                await self._bot.send_message(
+                    tg_user_id,
+                    text,
+                    parse_mode="HTML",
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
                 )
-        except Exception:
-            logger.exception(
-                "Не удалось записать ReminderLog user=%s assignment=%s",
-                user_id,
-                assignment_id,
+            except Exception:
+                logger.exception(
+                    "Не удалось отправить напоминание user=%s item=%s", user_id, item_id
+                )
+                continue
+            try:
+                async with self._session_factory() as session, session.begin():
+                    await ReminderLogRepository(session).mark_sent(
+                        item_id=item_id, user_id=user_id, offset_minutes=offset_minutes
+                    )
+            except Exception:
+                logger.exception("Не удалось записать журнал user=%s item=%s", user_id, item_id)
+                continue
+            sent += 1
+        return sent
+
+    async def _prepare(
+        self, *, item_id: int, offset_minutes: int, now: datetime
+    ) -> tuple[str, list[tuple[int, int]]] | None:
+        async with self._session_factory() as session:
+            item = await ItemRepository(session).get(item_id)
+            if item is None or not item.is_active or item.due_at is None:
+                return None
+            if ensure_utc(item.due_at) <= now:
+                return None
+            groups = GroupRepository(session)
+            group = await groups.get(item.group_id)
+            if group is None:
+                return None
+            offsets = resolve_offsets(
+                kind=item.kind,
+                item_offsets=item.reminder_offsets,
+                muted=item.reminders_muted,
+                settings=group.reminders,
             )
-            continue
-        sent += 1
-    return sent
+            if offset_minutes not in offsets:
+                return None
+            subject = await SubjectRepository(session).get(item.subject_id)
+            already = await ReminderLogRepository(session).sent_user_ids(
+                item_id=item_id, offset_minutes=offset_minutes
+            )
+            done = await CompletionRepository(session).users_who_completed(item_id)
+            skip = already | done
+            recipients = [
+                (m.user.id, m.user.tg_user_id)
+                for m in await groups.list_members(group.id)
+                if m.personal_reminders_enabled and m.user.id not in skip
+            ]
+            text = render_reminder(
+                item=item,
+                subject_name=subject.name if subject else "?",
+                group=group,
+                offset_minutes=offset_minutes,
+                now=now,
+            )
+        return text, recipients

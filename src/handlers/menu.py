@@ -1,103 +1,89 @@
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardMarkup,
-    Message,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
+from aiogram.types import CallbackQuery, Message
+
+from src.handlers.ui import Event, load_context, notify, show
+from src.ui import keyboards as kb
+from src.ui.callbacks import NOOP, Nav
+from src.views.texts import (
+    CANCELLED,
+    HELP,
+    MENU_HOME,
+    MENU_HOME_NO_GROUP,
+    NOTHING_TO_CANCEL,
+    START,
 )
 
-from src import texts
-from src.db.session import SessionLocal
-from src.keyboards import back_home_kb, home_reply_kb
-from src.services.groups import get_active_group, is_creator
-from src.services.users import get_or_create_user
-
 router = Router(name="menu")
+router.message.filter(F.chat.type == "private")
 
 
-async def render(
-    target: Message | CallbackQuery,
-    text: str,
-    kb: InlineKeyboardMarkup | ReplyKeyboardMarkup | ReplyKeyboardRemove | None,
-) -> None:
-    """Унифицированный рендер.
+@router.message(CommandStart(deep_link=True))
+async def cmd_start_deep_link(message: Message, command: CommandObject, state: FSMContext) -> None:
+    """Вход в группу по ссылке-приглашению."""
+    from src.handlers.groupctl import join_by_payload
 
-    На Message — отправляет новое сообщение. На CallbackQuery — пытается
-    отредактировать исходное сообщение (только для inline-клавиатур),
-    иначе отправляет новое.
-    """
-    is_inline = isinstance(kb, InlineKeyboardMarkup) or kb is None
-    if isinstance(target, CallbackQuery):
-        msg = target.message
-        if isinstance(msg, Message):
-            if is_inline:
-                try:
-                    await msg.edit_text(text, reply_markup=kb)
-                except Exception:
-                    await msg.answer(text, reply_markup=kb)
-            else:
-                # Reply-клавиатуру нельзя приклеить через edit_text — шлём новое.
-                await msg.answer(text, reply_markup=kb)
-        await target.answer()
-        return
-    await target.answer(text, reply_markup=kb)
+    await state.clear()
+    await message.answer(START, reply_markup=kb.home_reply(), parse_mode="HTML")
+    if not await join_by_payload(message, state, command.args or ""):
+        await open_home(message)
 
 
-async def _home_state(tg_user_id: int, tg_username: str | None, full_name: str) -> tuple[bool, bool, str]:
-    """Возвращает (has_active_group, is_creator, group_name_or_empty)."""
-    async with SessionLocal() as session, session.begin():
-        user = await get_or_create_user(session, tg_user_id, tg_username, full_name)
-        group = await get_active_group(session, user)
-        if group is None:
-            return False, False, ""
-        creator = await is_creator(session, user.id, group.id)
-        return True, creator, group.name
-
-
-def _home_text(has_group: bool, group_name: str) -> str:
-    if not has_group:
-        return texts.MENU_HOME_NO_GROUP
-    return texts.MENU_HOME.format(group=group_name)
-
-
-async def open_home(target: Message | CallbackQuery, state: FSMContext | None = None) -> None:
-    # При входе в главное меню сбрасываем зависший FSM (если был).
-    if state is not None and await state.get_state() is not None:
-        await state.clear()
-    user = target.from_user
-    if user is None:
-        return
-    has_group, _creator, group_name = await _home_state(
-        user.id, user.username, user.full_name or user.username or "user"
-    )
-    await render(target, _home_text(has_group, group_name), home_reply_kb())
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    """Приветствие и постоянная клавиатура."""
+    await state.clear()
+    await message.answer(START, reply_markup=kb.home_reply(), parse_mode="HTML")
+    await open_home(message)
 
 
 @router.message(Command("menu"))
 async def cmd_menu(message: Message, state: FSMContext) -> None:
-    await open_home(message, state)
+    """Главное меню."""
+    await state.clear()
+    await message.answer("Меню", reply_markup=kb.home_reply())
+    await open_home(message)
 
 
-@router.callback_query(F.data == "m:home")
+@router.message(Command("help"))
+@router.callback_query(Nav.filter(F.to == "help"))
+async def cmd_help(event: Event, *args, **kwargs) -> None:
+    """Справка."""
+    await show(event, HELP, kb.back_keyboard("home"))
+
+
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext) -> None:
+    """Прерывает текущий диалог."""
+    if await state.get_state() is None:
+        await message.answer(NOTHING_TO_CANCEL)
+        return
+    await state.clear()
+    await message.answer(CANCELLED)
+    await open_home(message)
+
+
+@router.callback_query(Nav.filter(F.to == "home"))
 async def cb_home(callback: CallbackQuery, state: FSMContext) -> None:
-    await open_home(callback, state)
+    """Возврат в главное меню."""
+    await state.clear()
+    await callback.answer()
+    await open_home(callback)
 
 
-@router.callback_query(F.data == "m:help")
-async def cb_help(callback: CallbackQuery) -> None:
-    await render(callback, texts.HELP, back_home_kb())
+@router.callback_query(F.data == NOOP)
+async def cb_noop(callback: CallbackQuery) -> None:
+    """Неактивная кнопка."""
+    await callback.answer()
 
 
-# Заглушки на остальные секции — заполним в следующих этапах.
-_STUB_SECTIONS: dict[str, str] = {}
-
-
-if _STUB_SECTIONS:
-
-    @router.callback_query(F.data.in_(set(_STUB_SECTIONS.keys())))
-    async def cb_stub(callback: CallbackQuery) -> None:
-        text = _STUB_SECTIONS.get(callback.data or "", "В разработке.")
-        await render(callback, text, back_home_kb())
+async def open_home(event: Event) -> None:
+    """Рисует главное меню с учётом активной группы."""
+    ctx = await load_context(event)
+    if ctx is None:
+        await notify(event, MENU_HOME_NO_GROUP)
+        return
+    active = ctx.activated()
+    text = MENU_HOME.format(group=active.group.name) if active else MENU_HOME_NO_GROUP
+    await show(event, text)

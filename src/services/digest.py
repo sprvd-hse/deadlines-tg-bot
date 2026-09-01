@@ -1,171 +1,169 @@
+import contextlib
 import logging
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from aiogram.types import LinkPreviewOptions
 
-from src.db.models import Assignment, AssignmentType, Group, GroupMember, Subject, User
-from src.keyboards import ASSIGNMENT_TYPE_LABELS
-from src.utils import ensure_utc
+from src.db.repositories.groups import GroupRepository
+from src.db.repositories.subjects import SubjectRepository
+from src.domain.models import Group
+from src.services.items import ItemManager
+from src.views.common import split_messages
+from src.views.items import render_digest
 
 logger = logging.getLogger(__name__)
 
-DIGEST_HORIZON_DAYS = 14
-MAX_MESSAGE_CHARS = 4000
-
-_RU_WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+DEFAULT_HORIZON_DAYS = 14
 
 
-async def list_groups(session: AsyncSession) -> list[Group]:
-    return list((await session.execute(select(Group))).scalars())
+def last_digest_slot(group: Group, now: datetime) -> datetime:
+    """Последнее наступление (digest_day, digest_hour) в поясе группы не позже now, в UTC."""
+    local = now.astimezone(group.tz)
+    today_slot = local.replace(hour=group.digest_hour, minute=0, second=0, microsecond=0)
+    days_since = (local.weekday() - group.digest_day) % 7
+    slot_local = today_slot - timedelta(days=days_since)
+    if slot_local > local:
+        slot_local -= timedelta(days=7)
+    return slot_local.astimezone(UTC)
 
 
-async def list_recipients(session: AsyncSession, group_id: int) -> list[User]:
-    rows = (
-        await session.execute(
-            select(User)
-            .join(GroupMember, GroupMember.user_id == User.id)
-            .where(GroupMember.group_id == group_id)
+def is_digest_due(group: Group, now: datetime) -> bool:
+    """Наступил ли новый слот дайджеста, ещё не отработанный для группы."""
+    slot_start = last_digest_slot(group, now)
+    last_sent = group.digest_last_sent_at
+    if last_sent is None:
+        return True
+    if last_sent.tzinfo is None:
+        last_sent = last_sent.replace(tzinfo=UTC)
+    return last_sent < slot_start
+
+
+class DigestService:
+    """Сборка и отправка дайджеста ближайших дедлайнов."""
+
+    def __init__(self, session_factory, bot) -> None:
+        self._session_factory = session_factory
+        self._bot = bot
+
+    async def build(
+        self,
+        session,
+        group: Group,
+        *,
+        now: datetime,
+        horizon_days: int | None = DEFAULT_HORIZON_DAYS,
+        header: str | None = None,
+    ) -> list[str]:
+        """Собирает готовые к отправке сообщения дайджеста."""
+        items = ItemManager(session)
+        until = now + timedelta(days=horizon_days) if horizon_days else None
+        upcoming = await items.upcoming(group.id, now=now, until=until)
+        subject_names = {
+            s.id: s.name for s in await SubjectRepository(session).list_for_group(group.id)
+        }
+        title = header or _default_header(horizon_days)
+        blocks = render_digest(
+            items=upcoming,
+            subject_names=subject_names,
+            group=group,
+            now=now,
+            header=title,
         )
-    ).scalars()
-    return list(rows)
+        return split_messages(blocks)
 
+    async def send_for_group(self, group_id: int, *, now: datetime | None = None) -> bool:
+        """Отправляет дайджест в привязанный чат или всем участникам в личку."""
+        moment = now or datetime.now(tz=UTC)
+        async with self._session_factory() as session:
+            groups = GroupRepository(session)
+            group = await groups.get(group_id)
+            if group is None:
+                return False
+            messages = await self.build(session, group, now=moment)
+            chat_id = group.chat_id
+            previous_pin = group.digest_pinned_message_id
+            recipients = (
+                []
+                if chat_id
+                else [
+                    m.user.tg_user_id
+                    for m in await groups.list_members(group_id)
+                    if m.personal_reminders_enabled
+                ]
+            )
+        if not messages:
+            return False
+        if chat_id is not None:
+            await self._send_to_chat(group_id, chat_id, messages, previous_pin=previous_pin)
+            return True
+        for target in recipients:
+            await self._send_all(target, messages)
+        return True
 
-async def build_digest_messages(
-    session: AsyncSession,
-    group: Group,
-    *,
-    now_utc: datetime | None = None,
-    horizon_days: int | None = DIGEST_HORIZON_DAYS,
-    include_passed: bool = False,
-    header_override: str | None = None,
-) -> list[str]:
-    """Возвращает список сообщений (учитывая лимит 4000 символов, разбивка по дням).
+    async def _send_to_chat(
+        self, group_id: int, chat_id: int, messages: list[str], *, previous_pin: int | None
+    ) -> None:
+        """Шлёт дайджест в чат и закрепляет его, откручивая предыдущий закреп."""
+        sent = await self._send_all(chat_id, messages)
+        if not sent:
+            return
+        if previous_pin is not None:
+            with contextlib.suppress(Exception):
+                await self._bot.unpin_chat_message(chat_id=chat_id, message_id=previous_pin)
+        pinned_id: int | None = None
+        try:
+            await self._bot.pin_chat_message(
+                chat_id=chat_id, message_id=sent[0], disable_notification=True
+            )
+            pinned_id = sent[0]
+        except Exception:
+            logger.exception("Не удалось закрепить дайджест в чате %s", chat_id)
+        async with self._session_factory() as session, session.begin():
+            await GroupRepository(session).update_settings(
+                group_id, digest_pinned_message_id=pinned_id
+            )
 
-    horizon_days=None — без ограничения сверху (все будущие дедлайны).
-    include_passed=True — добавить блок «Прошедшие» в конец.
-    """
-    now = now_utc or datetime.now(tz=UTC)
-    upcoming_stmt = (
-        select(Assignment, Subject.name)
-        .join(Subject, Subject.id == Assignment.subject_id)
-        .where(
-            Assignment.group_id == group.id,
-            Assignment.is_active.is_(True),
-            Assignment.deadline >= now,
-        )
-        .order_by(Assignment.deadline)
-    )
-    if horizon_days is not None:
-        upcoming_stmt = upcoming_stmt.where(
-            Assignment.deadline < now + timedelta(days=horizon_days)
-        )
-    rows = list((await session.execute(upcoming_stmt)).all())
-    open_rows = list(
-        (
-            await session.execute(
-                select(Assignment, Subject.name)
-                .join(Subject, Subject.id == Assignment.subject_id)
-                .where(
-                    Assignment.group_id == group.id,
-                    Assignment.is_active.is_(True),
-                    Assignment.deadline.is_(None),
+    async def _send_all(self, target: int, messages: list[str]) -> list[int]:
+        """Отправляет все части дайджеста, возвращает id доставленных сообщений."""
+        sent: list[int] = []
+        for text in messages:
+            try:
+                message = await self._bot.send_message(
+                    target,
+                    text,
+                    parse_mode="HTML",
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
                 )
-                .order_by(Subject.name, Assignment.short_id)
-            )
-        ).all()
-    )
-    passed_rows: list[tuple[Assignment, str]] = []
-    if include_passed:
-        passed_rows = list(
-            (
-                await session.execute(
-                    select(Assignment, Subject.name)
-                    .join(Subject, Subject.id == Assignment.subject_id)
-                    .where(
-                        Assignment.group_id == group.id,
-                        Assignment.is_active.is_(True),
-                        Assignment.deadline.is_not(None),
-                        Assignment.deadline < now,
-                    )
-                    .order_by(Assignment.deadline.desc())
-                )
-            ).all()
-        )
-    tz = ZoneInfo(group.timezone)
-    by_day: dict[str, list[tuple[Assignment, str]]] = {}
-    day_order: list[str] = []
+            except Exception:
+                logger.exception("Не удалось отправить дайджест в чат %s", target)
+                continue
+            sent.append(message.message_id)
+        return sent
 
-    for a, subject_name in rows:
-        local = ensure_utc(a.deadline).astimezone(tz)
-        day_key = local.strftime("%Y-%m-%d")
-        if day_key not in by_day:
-            by_day[day_key] = []
-            day_order.append(day_key)
-        by_day[day_key].append((a, subject_name))
+    async def tick(self, *, now: datetime | None = None) -> None:
+        """Проверяет все группы и рассылает дайджест тем, у кого наступил слот."""
+        moment = now or datetime.now(tz=UTC)
+        async with self._session_factory() as session:
+            groups = await GroupRepository(session).list_all()
 
-    if not day_order and not open_rows and not passed_rows:
-        return []
+        for group in groups:
+            try:
+                if not is_digest_due(group, moment):
+                    continue
+            except Exception:
+                logger.exception("Не удалось вычислить слот дайджеста группы %s", group.id)
+                continue
+            try:
+                await self.send_for_group(group.id, now=moment)
+            except Exception:
+                logger.exception("Ошибка дайджеста группы %s", group.id)
+                continue
+            # Слот фиксируем даже когда отправлять было нечего, чтобы не пытаться повторно.
+            async with self._session_factory() as session, session.begin():
+                await GroupRepository(session).update_settings(group.id, digest_last_sent_at=moment)
 
-    def _type_part(a: Assignment) -> str:
-        if a.type == AssignmentType.other:
-            return ""
-        return f"[{ASSIGNMENT_TYPE_LABELS.get(a.type, a.type.value)}] "
 
-    if header_override is not None:
-        header = header_override
-    elif horizon_days is None:
-        header = f"Все задания группы «{group.name}»:"
-    else:
-        header = (
-            f"Дайджест группы «{group.name}» — задания на ближайшие {horizon_days} дней:"
-        )
-    day_blocks: list[str] = []
-    counter = 1
-    for day_key in day_order:
-        d = datetime.strptime(day_key, "%Y-%m-%d")
-        weekday = _RU_WEEKDAYS[d.weekday()]
-        title = f"{d.day:02d}.{d.month:02d} ({weekday})"
-        lines = [title]
-        for a, subject_name in by_day[day_key]:
-            local = ensure_utc(a.deadline).astimezone(tz)
-            time_str = local.strftime("%H:%M")
-            lines.append(
-                f"  {counter}. {time_str} {_type_part(a)}{a.title} ({subject_name})"
-            )
-            counter += 1
-        day_blocks.append("\n".join(lines))
-
-    if open_rows:
-        open_lines = ["До конца модуля:"]
-        for a, subject_name in open_rows:
-            open_lines.append(
-                f"  {counter}. {_type_part(a)}{a.title} ({subject_name})"
-            )
-            counter += 1
-        day_blocks.append("\n".join(open_lines))
-
-    if passed_rows:
-        passed_lines = ["Прошедшие:"]
-        for a, subject_name in passed_rows:
-            local = ensure_utc(a.deadline).astimezone(tz)
-            dl = f"{local.day:02d}.{local.month:02d} {local.strftime('%H:%M')}"
-            passed_lines.append(
-                f"  {counter}. {dl} {_type_part(a)}{a.title} ({subject_name})"
-            )
-            counter += 1
-        day_blocks.append("\n".join(passed_lines))
-
-    messages: list[str] = []
-    current = header
-    for block in day_blocks:
-        candidate = current + "\n\n" + block
-        if len(candidate) <= MAX_MESSAGE_CHARS:
-            current = candidate
-            continue
-        messages.append(current)
-        current = block
-    if current:
-        messages.append(current)
-    return messages
+def _default_header(horizon_days: int | None) -> str:
+    if horizon_days is None:
+        return "📅 Все задания группы"
+    return f"📅 Дедлайны на ближайшие {horizon_days} дней"

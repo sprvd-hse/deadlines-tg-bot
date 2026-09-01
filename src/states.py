@@ -1,34 +1,47 @@
 from aiogram.fsm.state import State, StatesGroup
 
 
-class AddAssignment(StatesGroup):
-    waiting_type = State()
-    waiting_subject = State()
-    waiting_title = State()
-    waiting_description = State()
-    waiting_deadline = State()
-    waiting_links = State()
-    waiting_confirm = State()
+class AddItem(StatesGroup):
+    """Мастер добавления задачи или важной даты."""
+
+    kind = State()
+    subject = State()
+    new_subject = State()
+    category = State()
+    title = State()
+    description = State()
+    deadline = State()
+    custom_time = State()
+    links = State()
+    confirm = State()
+    reminders = State()
 
 
-class GroupSettings(StatesGroup):
-    waiting_tz = State()
+class EditItem(StatesGroup):
+    """Изменение отдельного поля записи."""
 
-
-class Subjects(StatesGroup):
-    waiting_name = State()
+    field = State()
+    title = State()
+    description = State()
+    links = State()
+    deadline = State()
+    custom_time = State()
 
 
 class GroupOnboarding(StatesGroup):
-    waiting_name = State()
-    waiting_code = State()
+    """Создание группы или вход по коду."""
+
+    name = State()
+    code = State()
 
 
-class EditAssignment(StatesGroup):
-    waiting_type = State()
-    waiting_subject = State()
-    waiting_title = State()
-    waiting_description = State()
-    waiting_deadline = State()
-    waiting_links = State()
-    waiting_confirm = State()
+class SubjectInput(StatesGroup):
+    """Ввод названия предмета."""
+
+    name = State()
+
+
+class AdminInput(StatesGroup):
+    """Ввод настроек группы."""
+
+    timezone = State()

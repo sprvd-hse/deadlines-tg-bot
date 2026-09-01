@@ -1,294 +1,243 @@
+import logging
 import time
+from dataclasses import dataclass
 from typing import Literal
 
-from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.models import (
-    Assignment,
-    AssignmentCompletion,
-    Group,
-    GroupMember,
-    MemberRole,
-    ReminderLog,
-    Subject,
-    User,
-)
+from src.config import settings
+from src.db.repositories.groups import GroupRepository
+from src.db.repositories.subjects import SubjectRepository
+from src.db.repositories.users import UserRepository
+from src.domain.enums import MemberRole
+from src.domain.models import Group, Member, Subject, User
 from src.utils import generate_invite_code
 
-JoinStatus = Literal["ok", "not_found", "already_member"]
+logger = logging.getLogger(__name__)
+
+JoinStatus = Literal["ok", "not_found", "already_member", "rate_limited"]
 TransferStatus = Literal["ok", "not_member", "same_user"]
 LeaveStatus = Literal["left", "group_deleted", "need_transfer", "not_member"]
+SubjectStatus = Literal["ok", "duplicate", "not_found", "has_items"]
 
-_INVITE_GENERATION_RETRIES = 5
-
-# Простой in-memory rate-limit для /join: 5 попыток в минуту на tg_user_id.
+_INVITE_RETRIES = 5
 _JOIN_RATE_WINDOW = 60.0
 _JOIN_RATE_MAX = 5
 _join_attempts: dict[int, list[float]] = {}
 
 
 def check_join_rate_limit(tg_user_id: int) -> bool:
-    """True — запрос разрешён, False — лимит превышен."""
+    """Пропускает не больше пяти попыток входа по коду в минуту на пользователя."""
     now = time.monotonic()
     window = _join_attempts.setdefault(tg_user_id, [])
     window[:] = [t for t in window if now - t < _JOIN_RATE_WINDOW]
     if len(window) >= _JOIN_RATE_MAX:
         return False
     window.append(now)
-    # Лёгкая чистка пустых окон у других пользователей, чтобы dict не рос.
     if len(_join_attempts) > 1024:
-        for uid, w in list(_join_attempts.items()):
-            if uid != tg_user_id and (not w or now - w[-1] >= _JOIN_RATE_WINDOW):
+        for uid, entries in list(_join_attempts.items()):
+            if uid != tg_user_id and (not entries or now - entries[-1] >= _JOIN_RATE_WINDOW):
                 _join_attempts.pop(uid, None)
     return True
 
 
-async def create_group(
-    session: AsyncSession,
-    creator: User,
-    name: str,
-    timezone: str,
-) -> Group:
-    """Создаёт группу, добавляет creator-членство, ставит группу активной у создателя."""
-    code = await _generate_unique_invite_code(session)
+@dataclass(frozen=True, slots=True)
+class GroupContext:
+    """Пользователь вместе с его активной группой и участием в ней."""
 
-    group = Group(
-        name=name,
-        invite_code=code,
-        timezone=timezone,
-        created_by_user_id=creator.id,
-    )
-    session.add(group)
-    await session.flush()
+    user: User
+    group: Group | None
+    member: Member | None
 
-    session.add(GroupMember(group_id=group.id, user_id=creator.id, role=MemberRole.creator))
-    creator.active_group_id = group.id
-    return group
+    @property
+    def has_group(self) -> bool:
+        """Есть ли у пользователя активная группа."""
+        return self.group is not None
+
+    @property
+    def is_creator(self) -> bool:
+        """Является ли пользователь создателем активной группы."""
+        return self.member is not None and self.member.is_creator
+
+    def activated(self) -> "ActiveContext | None":
+        """Возвращает контекст с гарантированно непустой группой."""
+        if self.group is None or self.member is None:
+            return None
+        return ActiveContext(user=self.user, group=self.group, member=self.member)
 
 
-async def join_group(
-    session: AsyncSession,
-    user: User,
-    invite_code: str,
-) -> tuple[Group | None, JoinStatus]:
-    """Присоединяет пользователя к группе по коду. Делает группу активной."""
-    group = (
-        await session.execute(select(Group).where(Group.invite_code == invite_code))
-    ).scalar_one_or_none()
-    if group is None:
-        return None, "not_found"
+@dataclass(frozen=True, slots=True)
+class ActiveContext:
+    """Контекст пользователя, у которого точно есть активная группа."""
 
-    existing = (
-        await session.execute(
-            select(GroupMember).where(
-                GroupMember.group_id == group.id,
-                GroupMember.user_id == user.id,
-            )
+    user: User
+    group: Group
+    member: Member
+
+    @property
+    def is_creator(self) -> bool:
+        """Является ли пользователь создателем активной группы."""
+        return self.member.is_creator
+
+
+class GroupManager:
+    """Жизненный цикл групп, участников и предметов."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+        self._groups = GroupRepository(session)
+        self._users = UserRepository(session)
+        self._subjects = SubjectRepository(session)
+
+    async def context(
+        self, *, tg_user_id: int, tg_username: str | None, full_name: str
+    ) -> GroupContext:
+        """Загружает пользователя (создавая при необходимости) и его активную группу."""
+        user = await self._users.get_or_create(
+            tg_user_id=tg_user_id, tg_username=tg_username, full_name=full_name
         )
-    ).scalar_one_or_none()
+        if user.active_group_id is None:
+            return GroupContext(user=user, group=None, member=None)
+        group = await self._groups.get(user.active_group_id)
+        if group is None:
+            await self._users.set_active_group(user_id=user.id, group_id=None)
+            return GroupContext(user=user, group=None, member=None)
+        member = await self._groups.get_member(group_id=group.id, user_id=user.id)
+        if member is None:
+            await self._users.set_active_group(user_id=user.id, group_id=None)
+            return GroupContext(user=user, group=None, member=None)
+        return GroupContext(user=user, group=group, member=member)
 
-    if existing is not None:
-        user.active_group_id = group.id
-        return group, "already_member"
+    async def get_group(self, group_id: int) -> Group | None:
+        """Возвращает группу по id."""
+        return await self._groups.get(group_id)
 
-    session.add(GroupMember(group_id=group.id, user_id=user.id, role=MemberRole.member))
-    user.active_group_id = group.id
-    return group, "ok"
+    async def group_by_chat(self, chat_id: int) -> Group | None:
+        """Возвращает группу, привязанную к чату."""
+        return await self._groups.get_by_chat_id(chat_id)
 
-
-async def list_user_groups(
-    session: AsyncSession,
-    user: User,
-) -> list[tuple[Group, MemberRole]]:
-    """Возвращает группы пользователя с его ролью, отсортированные по названию."""
-    rows = (
-        await session.execute(
-            select(Group, GroupMember.role)
-            .join(GroupMember, GroupMember.group_id == Group.id)
-            .where(GroupMember.user_id == user.id)
-            .order_by(Group.name)
+    async def create_group(self, *, creator: User, name: str, timezone: str | None = None) -> Group:
+        """Создаёт группу и делает её активной у создателя."""
+        code = await self._unique_invite_code()
+        group = await self._groups.create(
+            name=name.strip(),
+            invite_code=code,
+            timezone=timezone or settings.default_timezone,
+            creator_id=creator.id,
         )
-    ).all()
-    return [(g, role) for g, role in rows]
+        await self._users.set_active_group(user_id=creator.id, group_id=group.id)
+        return group
 
+    async def join_group(self, *, user: User, invite_code: str) -> tuple[Group | None, JoinStatus]:
+        """Присоединяет пользователя к группе по коду и делает её активной."""
+        group = await self._groups.get_by_invite_code(invite_code)
+        if group is None:
+            return None, "not_found"
+        existing = await self._groups.get_member(group_id=group.id, user_id=user.id)
+        await self._users.set_active_group(user_id=user.id, group_id=group.id)
+        if existing is not None:
+            return group, "already_member"
+        await self._groups.add_member(group_id=group.id, user_id=user.id)
+        return group, "ok"
 
-async def switch_active_group(
-    session: AsyncSession,
-    user: User,
-    group_id: int,
-) -> Group | None:
-    """Делает группу активной, если пользователь в ней состоит. Иначе None."""
-    group = (
-        await session.execute(
-            select(Group)
-            .join(GroupMember, GroupMember.group_id == Group.id)
-            .where(Group.id == group_id, GroupMember.user_id == user.id)
+    async def user_groups(self, user_id: int) -> list[tuple[Group, MemberRole]]:
+        """Группы пользователя вместе с ролью в каждой."""
+        result: list[tuple[Group, MemberRole]] = []
+        for member in await self._groups.list_user_groups(user_id):
+            group = await self._groups.get(member.group_id)
+            if group is not None:
+                result.append((group, member.role))
+        return result
+
+    async def switch_active(self, *, user: User, group_id: int) -> Group | None:
+        """Делает группу активной, если пользователь в ней состоит."""
+        member = await self._groups.get_member(group_id=group_id, user_id=user.id)
+        if member is None:
+            return None
+        await self._users.set_active_group(user_id=user.id, group_id=group_id)
+        return await self._groups.get(group_id)
+
+    async def members(self, group_id: int) -> list[Member]:
+        """Участники группы."""
+        return await self._groups.list_members(group_id)
+
+    async def update_settings(self, group_id: int, **values) -> Group | None:
+        """Обновляет настройки группы и возвращает свежую версию."""
+        await self._groups.update_settings(group_id, **values)
+        return await self._groups.get(group_id)
+
+    async def regenerate_invite_code(self, group_id: int) -> str:
+        """Выдаёт группе новый invite-код."""
+        code = await self._unique_invite_code()
+        await self._groups.update_settings(group_id, invite_code=code)
+        return code
+
+    async def set_personal_reminders(self, *, group_id: int, user_id: int, enabled: bool) -> None:
+        """Включает или выключает личные напоминания участника."""
+        await self._groups.set_personal_reminders(
+            group_id=group_id, user_id=user_id, enabled=enabled
         )
-    ).scalar_one_or_none()
-    if group is None:
-        return None
-    user.active_group_id = group.id
-    return group
 
-
-async def get_active_group(session: AsyncSession, user: User) -> Group | None:
-    if user.active_group_id is None:
-        return None
-    return (
-        await session.execute(select(Group).where(Group.id == user.active_group_id))
-    ).scalar_one_or_none()
-
-
-async def is_creator(session: AsyncSession, user_id: int, group_id: int) -> bool:
-    role = (
-        await session.execute(
-            select(GroupMember.role).where(
-                GroupMember.user_id == user_id, GroupMember.group_id == group_id
-            )
+    async def transfer_ownership(
+        self, *, group_id: int, current_creator_id: int, new_creator_id: int
+    ) -> TransferStatus:
+        """Передаёт роль создателя другому участнику."""
+        if current_creator_id == new_creator_id:
+            return "same_user"
+        if await self._groups.get_member(group_id=group_id, user_id=new_creator_id) is None:
+            return "not_member"
+        await self._groups.set_role(
+            group_id=group_id, user_id=current_creator_id, role=MemberRole.MEMBER
         )
-    ).scalar_one_or_none()
-    return role == MemberRole.creator
-
-
-async def list_members(
-    session: AsyncSession, group_id: int
-) -> list[tuple[User, MemberRole]]:
-    """Список (user, role) для группы, отсортированный creator-сначала, потом по имени."""
-    rows = (
-        await session.execute(
-            select(User, GroupMember.role)
-            .join(GroupMember, GroupMember.user_id == User.id)
-            .where(GroupMember.group_id == group_id)
-            .order_by(GroupMember.role, User.full_name)
+        await self._groups.set_role(
+            group_id=group_id, user_id=new_creator_id, role=MemberRole.CREATOR
         )
-    ).all()
-    return [(u, role) for u, role in rows]
+        return "ok"
 
+    async def leave_group(self, *, group_id: int, user_id: int) -> LeaveStatus:
+        """Выводит участника из группы; последнего участника — вместе с группой."""
+        member = await self._groups.get_member(group_id=group_id, user_id=user_id)
+        if member is None:
+            return "not_member"
+        total = await self._groups.count_members(group_id)
+        if total == 1:
+            await self._groups.delete_group(group_id)
+            return "group_deleted"
+        if member.is_creator:
+            return "need_transfer"
+        await self._groups.remove_member(group_id=group_id, user_id=user_id)
+        await self._users.set_active_group(user_id=user_id, group_id=None)
+        return "left"
 
-async def transfer_ownership(
-    session: AsyncSession, *, group_id: int, current_creator_id: int, new_creator_user_id: int
-) -> TransferStatus:
-    if current_creator_id == new_creator_user_id:
-        return "same_user"
-    new_member = (
-        await session.execute(
-            select(GroupMember).where(
-                GroupMember.group_id == group_id,
-                GroupMember.user_id == new_creator_user_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if new_member is None:
-        return "not_member"
-    current_member = (
-        await session.execute(
-            select(GroupMember).where(
-                GroupMember.group_id == group_id,
-                GroupMember.user_id == current_creator_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if current_member is not None:
-        current_member.role = MemberRole.member
-    new_member.role = MemberRole.creator
-    return "ok"
+    async def delete_group(self, group_id: int) -> None:
+        """Удаляет группу со всем содержимым."""
+        await self._groups.delete_group(group_id)
 
+    async def subjects(self, group_id: int) -> list[Subject]:
+        """Предметы группы."""
+        return await self._subjects.list_for_group(group_id)
 
-async def regenerate_invite_code(session: AsyncSession, group: Group) -> str:
-    code = await _generate_unique_invite_code(session)
-    group.invite_code = code
-    return code
+    async def add_subject(
+        self, *, group_id: int, name: str
+    ) -> tuple[Subject | None, SubjectStatus]:
+        """Создаёт предмет, если такого имени ещё нет."""
+        if await self._subjects.find_by_name(group_id=group_id, name=name) is not None:
+            return None, "duplicate"
+        return await self._subjects.create(group_id=group_id, name=name), "ok"
 
+    async def delete_subject(self, subject_id: int) -> SubjectStatus:
+        """Удаляет предмет, если на нём нет активных записей."""
+        subject = await self._subjects.get(subject_id)
+        if subject is None:
+            return "not_found"
+        if await self._subjects.has_items(subject_id):
+            return "has_items"
+        await self._subjects.delete(subject_id)
+        return "ok"
 
-async def get_member(
-    session: AsyncSession, *, group_id: int, user_id: int
-) -> GroupMember | None:
-    return (
-        await session.execute(
-            select(GroupMember).where(
-                GroupMember.group_id == group_id, GroupMember.user_id == user_id
-            )
-        )
-    ).scalar_one_or_none()
-
-
-async def set_personal_reminders(
-    session: AsyncSession, *, group_id: int, user_id: int, enabled: bool
-) -> bool:
-    """Устанавливает personal_reminders_enabled, возвращает новое значение."""
-    member = await get_member(session, group_id=group_id, user_id=user_id)
-    if member is None:
-        return enabled
-    member.personal_reminders_enabled = enabled
-    return enabled
-
-
-async def leave_group(
-    session: AsyncSession, *, group_id: int, user_id: int
-) -> LeaveStatus:
-    member = await get_member(session, group_id=group_id, user_id=user_id)
-    if member is None:
-        return "not_member"
-    members_count = (
-        await session.execute(
-            select(GroupMember).where(GroupMember.group_id == group_id)
-        )
-    ).all()
-    if member.role == MemberRole.creator and len(members_count) > 1:
-        return "need_transfer"
-    if len(members_count) == 1:
-        await delete_group(session, group_id)
-        return "group_deleted"
-    await session.execute(
-        delete(GroupMember).where(
-            GroupMember.group_id == group_id, GroupMember.user_id == user_id
-        )
-    )
-    return "left"
-
-
-async def delete_group(session: AsyncSession, group_id: int) -> None:
-    """Удаляет группу. Порядок: reminder_log → completions → assignments → subjects → members → group.
-
-    Явный порядок нужен потому, что Assignment.subject_id имеет ondelete=RESTRICT
-    и каскад с groups может попытаться удалить subject раньше assignment.
-    Также сбрасываем active_group_id у пользователей, чтобы FK SET NULL отработал
-    предсказуемо при последующем DELETE Group.
-    """
-    assignment_ids = list(
-        (
-            await session.execute(
-                select(Assignment.id).where(Assignment.group_id == group_id)
-            )
-        ).scalars()
-    )
-    if assignment_ids:
-        await session.execute(
-            delete(ReminderLog).where(ReminderLog.assignment_id.in_(assignment_ids))
-        )
-        await session.execute(
-            delete(AssignmentCompletion).where(
-                AssignmentCompletion.assignment_id.in_(assignment_ids)
-            )
-        )
-    await session.execute(delete(Assignment).where(Assignment.group_id == group_id))
-    await session.execute(delete(Subject).where(Subject.group_id == group_id))
-    await session.execute(delete(GroupMember).where(GroupMember.group_id == group_id))
-    await session.execute(
-        User.__table__.update()
-        .where(User.active_group_id == group_id)
-        .values(active_group_id=None)
-    )
-    await session.execute(delete(Group).where(Group.id == group_id))
-
-
-async def _generate_unique_invite_code(session: AsyncSession) -> str:
-    for _ in range(_INVITE_GENERATION_RETRIES):
-        code = generate_invite_code()
-        existing = (
-            await session.execute(select(Group.id).where(Group.invite_code == code))
-        ).scalar_one_or_none()
-        if existing is None:
-            return code
-    raise RuntimeError("Не удалось сгенерировать уникальный invite-код")
+    async def _unique_invite_code(self) -> str:
+        for _ in range(_INVITE_RETRIES):
+            code = generate_invite_code()
+            if not await self._groups.invite_code_exists(code):
+                return code
+        raise RuntimeError("Не удалось сгенерировать уникальный invite-код")
